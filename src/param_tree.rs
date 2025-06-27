@@ -40,7 +40,7 @@ impl TryToValue for ParamValue {
 }
 
 impl ParamValue {
-    pub(crate) fn get_keys(&self) -> Vec<String> {
+    pub fn get_keys(&self) -> Vec<String> {
         match self {
             ParamValue::HashMap(hm) => {
                 let mut keys = Vec::new();
@@ -56,12 +56,12 @@ impl ParamValue {
         }
     }
 
-    pub(crate) fn contains(&self, key: String) -> bool {
+    pub fn contains(&self, key: String) -> bool {
         let key = key.split('/');
         self.get(key).is_some()
     }
 
-    pub(crate) fn get<I, T>(&self, key: I) -> Option<Value>
+    pub fn get<I, T>(&self, key: I) -> Option<Value>
     where
         I: IntoIterator<Item = T>,
         T: AsRef<str>,
@@ -86,7 +86,7 @@ impl ParamValue {
         Some(hm.try_to_value().unwrap())
     }
 
-    pub(crate) fn remove<I, T>(&mut self, key: I)
+    pub fn remove<I, T>(&mut self, key: I)
     where
         I: IntoIterator<Item = T>,
         T: AsRef<str>,
@@ -119,7 +119,7 @@ impl ParamValue {
         }
     }
 
-    pub(crate) fn update_inner<I, T>(&mut self, mut key: I, value: Value)
+    pub fn update_inner<I, T>(&mut self, mut key: I, value: Value)
     where
         I: Iterator<Item = T>,
         T: AsRef<str>,

@@ -35,6 +35,11 @@ rosrust_msg = "0.1"
 doc-comment = "0.3.3"
 tokio = { version = "1", features = ["signal"]}
 tokio-util = "0.7.15"
+criterion = "0.6"
 
 [features]
 doctest = []
+
+[[bench]]
+name = "param_tree"
+harness = false
