@@ -125,7 +125,7 @@ pub struct RosData {
     publications: RwLock<Publishers>, // stores information about topic publishers
     parameters: RwLock<Parameters>, // stores information about ROS parameters
     parameter_subscriptions: RwLock<Vec<ParamSubscription>>, // stores information about parameter subscriptions
-    uri: std::net::SocketAddr,                               // the address of the ROS network
+    uri: String,                                             // the address of the ROS network
 }
 
 pub struct Master {
@@ -735,10 +735,9 @@ type GetUriResponse = (i32, String, String);
 impl Handler for GetUriHandler {
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
         log::debug!("GetUriHandler {:?} ", params);
-        type Request = String;
-        let _caller_id = Request::try_from_params(params)?;
-        let result = format!("/{}", self.data.uri.clone());
-        return Ok((1, "", (result,)).try_to_value()?);
+        log::debug!("GetUriHandler returning {:?}", self.data.uri);
+
+        return Ok((1, "", self.data.uri.clone()).try_to_value()?);
     }
 }
 
@@ -1392,7 +1391,7 @@ fn get_node_id() -> Option<[u8; 6]> {
 }
 
 impl Master {
-    pub fn new(url: &std::net::SocketAddr) -> Master {
+    pub fn new(uri: String) -> Master {
         let run_id = ParamValue::Value(Value::string(
             uuid::Uuid::new_v1(
                 uuid::Timestamp::now(Context::new_random()),
@@ -1411,7 +1410,7 @@ impl Master {
                     "run_id".to_owned() => run_id
                 })),
                 parameter_subscriptions: RwLock::new(Vec::new()),
-                uri: url.to_owned(),
+                uri,
             }),
         }
     }
@@ -1465,15 +1464,15 @@ impl Master {
     /// let core = Master::new(&socket_address.unwrap());
     /// core.serve();
     /// ```
-    pub async fn serve(&self) -> anyhow::Result<()> {
+    pub async fn serve(&self, bind_address: std::net::SocketAddr) -> anyhow::Result<()> {
         // Some ROS implementation use /RPC2 like the python subscribers. Some ROS implementation
         // use / like Foxglove. We serve them all.
         let router: axum::Router = axum::Router::new()
             .nest("/", self.create_router())
             .nest("/RPC2", self.create_router());
-        log::info!("roscore-rs is listening on {}", self.data.uri);
+        log::info!("roscore-rs is listening on {}", bind_address);
         let server = Server::from_route(router);
-        Ok(server.serve(self.data.uri.try_into()?).await?)
+        Ok(server.serve(bind_address).await?)
     }
 }
 
