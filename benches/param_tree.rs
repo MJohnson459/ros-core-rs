@@ -204,7 +204,7 @@ fn benchmark_update_inner(c: &mut Criterion) {
             let mut tree = create_simple_tree();
             tree.update_inner(
                 black_box(["run_id"].iter()),
-                black_box(Value::string("new_value".to_owned())),
+                black_box(Value::string("new_value".to_owned()).into()),
             );
             black_box(tree);
         })
@@ -213,7 +213,10 @@ fn benchmark_update_inner(c: &mut Criterion) {
     group.bench_function("simple_tree_new", |b| {
         b.iter(|| {
             let mut tree = create_simple_tree();
-            tree.update_inner(black_box(["new_key"].iter()), black_box(Value::i4(123)));
+            tree.update_inner(
+                black_box(["new_key"].iter()),
+                black_box(Value::i4(123).into()),
+            );
             black_box(tree);
         })
     });
@@ -223,7 +226,7 @@ fn benchmark_update_inner(c: &mut Criterion) {
             let mut tree = create_complex_tree();
             tree.update_inner(
                 black_box(["arms", "arm_left", "joints", "shoulder"].iter()),
-                black_box(Value::double(180.0)),
+                black_box(Value::double(180.0).into()),
             );
             black_box(tree);
         })
@@ -234,7 +237,7 @@ fn benchmark_update_inner(c: &mut Criterion) {
             let mut tree = create_complex_tree();
             tree.update_inner(
                 black_box(["arms", "arm_left", "joints", "new_joint"].iter()),
-                black_box(Value::double(45.0)),
+                black_box(Value::double(45.0).into()),
             );
             black_box(tree);
         })
@@ -245,7 +248,7 @@ fn benchmark_update_inner(c: &mut Criterion) {
             let mut tree = create_complex_tree();
             tree.update_inner(
                 black_box(["new_section", "new_subsection", "new_value"].iter()),
-                black_box(Value::string("test".to_owned())),
+                black_box(Value::string("test".to_owned()).into()),
             );
             black_box(tree);
         })
@@ -342,8 +345,11 @@ fn benchmark_tree_operations_combined(c: &mut Criterion) {
             let _arm_length = tree.get(["arms", "arm_left", "length"]);
 
             // Update some values
-            tree.update_inner(["robot_id"].iter(), Value::i4(100));
-            tree.update_inner(["arms", "arm_left", "length"].iter(), Value::double(0.5));
+            tree.update_inner(["robot_id"].iter(), Value::i4(100).into());
+            tree.update_inner(
+                ["arms", "arm_left", "length"].iter(),
+                Value::double(0.5).into(),
+            );
 
             // Check if values exist
             let _has_robot = tree.contains("robot_id".to_string());

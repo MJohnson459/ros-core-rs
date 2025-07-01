@@ -46,6 +46,6 @@ doctest = []
 name = "param_tree"
 harness = false
 
-[[bin]]
-name = "ros_master_benchmark"
-harness = false
+# [[bin]]
+# name = "ros_master_benchmark"
+# harness = false

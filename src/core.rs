@@ -1,11 +1,9 @@
 extern crate dxr;
 use dxr_client::{Client, ClientBuilder, Url};
-use maplit::hashmap;
 use paste::paste;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use tokio::task::JoinSet;
 use uuid::Context;
 
 use dxr_server::{async_trait, Handler, HandlerResult};
@@ -16,8 +14,8 @@ use dxr_server::{
 
 use dxr::{TryFromParams, TryFromValue, TryToValue, Value};
 
-use crate::client_api::ClientApi;
 use crate::param_tree::ParamValue;
+use crate::{client_api::ClientApi, param_tree::ParamTree};
 
 pub type Services = HashMap<String, HashMap<String, String>>;
 pub type Nodes = HashMap<String, String>;
@@ -108,13 +106,6 @@ impl MasterEndpoints {
     }
 }
 
-#[derive(Debug)]
-struct ParamSubscription {
-    node_id: String,
-    param: String,
-    api_uri: String,
-}
-
 /// Struct containing information about ROS data.
 pub struct RosData {
     // RwLocks to allow for concurrent read/write access to data
@@ -123,9 +114,8 @@ pub struct RosData {
     topics: RwLock<Topics>,         // stores information about available topics
     subscriptions: RwLock<Subscriptions>, // stores information about topic subscriptions
     publications: RwLock<Publishers>, // stores information about topic publishers
-    parameters: RwLock<Parameters>, // stores information about ROS parameters
-    parameter_subscriptions: RwLock<Vec<ParamSubscription>>, // stores information about parameter subscriptions
-    uri: String,                                             // the address of the ROS network
+    parameters: ParamTree,          // stores information about ROS parameters
+    uri: String,                    // the address of the ROS network
 }
 
 pub struct Master {
@@ -855,98 +845,10 @@ impl Handler for DeleteParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
-        let key_split = key.strip_prefix('/').unwrap_or(&key).split('/');
-
-        let mut update_futures = JoinSet::new();
-
-        {
-            let mut params = self.data.parameters.write().unwrap();
-            params.remove(key_split);
-            let param_subscriptions = self.data.parameter_subscriptions.read().unwrap();
-            log::info!("updating subscribers of deleted param {}", &key);
-            for subscription in param_subscriptions.iter() {
-                log::debug!(
-                    "subscriber {:?} has subscription? {}",
-                    &subscription,
-                    one_is_prefix_of_the_other(&key, &subscription.param)
-                );
-                if one_is_prefix_of_the_other(&key, &subscription.param) {
-                    let subscribed_key_spit = subscription
-                        .param
-                        .strip_prefix('/')
-                        .unwrap_or(&subscription.param)
-                        .split('/');
-                    let new_value = params
-                        .get(subscribed_key_spit)
-                        .unwrap_or_else(|| crate::empty_struct());
-                    update_futures.spawn(update_client_with_new_param_value(
-                        subscription.api_uri.clone(),
-                        caller_id.clone(),
-                        subscription.node_id.clone(),
-                        subscription.param.clone(),
-                        new_value,
-                    ));
-                }
-            }
-        }
-
-        while let Some(res) = update_futures.join_next().await {
-            match res {
-                Ok(Ok(v)) => {
-                    log::debug!("a subscriber has been updated (res: {:#?})", &v);
-                }
-                Ok(Err(err)) => {
-                    log::warn!(
-                        "Error updating a subscriber of changed param {}:\n{:#?}",
-                        &key,
-                        err
-                    );
-                }
-                Err(err) => {
-                    log::warn!(
-                        "Error updating a subscriber of changed param {}:\n{:#?}",
-                        &key,
-                        err
-                    );
-                }
-            }
-        }
+        self.data.parameters.delete(key, caller_id).await;
 
         return Ok((1, "", 0).try_to_value()?);
     }
-}
-
-fn one_is_prefix_of_the_other(a: &str, b: &str) -> bool {
-    let len = a.len().min(b.len());
-    a[..len] == b[..len]
-}
-
-async fn update_client_with_new_param_value(
-    client_api_url: String,
-    updating_node_id: String,
-    subscribing_node_id: String,
-    param_name: String,
-    new_value: Value,
-) -> Result<Value, anyhow::Error> {
-    let client_api = ClientApi::new(&client_api_url);
-    let request = client_api.param_update(&updating_node_id, &param_name, &new_value);
-    let res = request.await;
-    match res {
-        Ok(ref v) => log::debug!(
-            "Sent new value for param '{}' to node '{}'. response: {:?}",
-            param_name,
-            subscribing_node_id,
-            &v
-        ),
-        Err(ref e) => log::debug!(
-            "Error sending new value for param '{}' to node '{}': {:?}",
-            param_name,
-            subscribing_node_id,
-            e
-        ),
-    }
-
-    Ok(res?)
 }
 
 /// Handler for setting a ROS parameter.
@@ -980,63 +882,13 @@ impl Handler for SetParamHandler {
         let (caller_id, key, value) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
 
-        let mut update_futures = JoinSet::new();
+        self.data
+            .parameters
+            .set(key.clone(), ParamValue::Value(value), caller_id)
+            .await;
+        let status = format!("parameter {} set", &key);
 
-        {
-            let key = key.clone();
-            let mut params = self.data.parameters.write().unwrap();
-            let key_split = key.strip_prefix('/').unwrap_or(&key).split('/');
-            params.update_inner(key_split, value);
-
-            let param_subscriptions = self.data.parameter_subscriptions.read().unwrap();
-            log::info!("updating param {}", &key);
-            for subscription in param_subscriptions.iter() {
-                log::debug!(
-                    "subscriber {:?} has subscription? {}",
-                    &subscription,
-                    one_is_prefix_of_the_other(&key, &subscription.param)
-                );
-                if one_is_prefix_of_the_other(&key, &subscription.param) {
-                    let subscribed_key_spit = subscription
-                        .param
-                        .strip_prefix('/')
-                        .unwrap_or(&subscription.param)
-                        .split('/');
-                    let new_value = params.get(subscribed_key_spit).unwrap();
-                    update_futures.spawn(update_client_with_new_param_value(
-                        subscription.api_uri.clone(),
-                        caller_id.clone(),
-                        subscription.node_id.clone(),
-                        subscription.param.clone(),
-                        new_value,
-                    ));
-                }
-            }
-        }
-
-        while let Some(res) = update_futures.join_next().await {
-            match res {
-                Ok(Ok(v)) => {
-                    log::debug!("a subscriber has been updated (res: {:#?})", &v);
-                }
-                Ok(Err(err)) => {
-                    log::warn!(
-                        "Error updating a subscriber of changed param {}:\n{:#?}",
-                        &key,
-                        err
-                    );
-                }
-                Err(err) => {
-                    log::warn!(
-                        "Error updating a subscriber of changed param {}:\n{:#?}",
-                        &key,
-                        err
-                    );
-                }
-            }
-        }
-
-        log::info!("done updating subscribers");
+        log::info!("SetParam({params:?}) returns (1, {status}, 0)");
 
         Ok((1, "", 0).try_to_value()?)
     }
@@ -1069,11 +921,13 @@ impl Handler for GetParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key_full = resolve(&caller_id, &key);
-        let params = self.data.parameters.read().unwrap();
-        let key_path = key_full.strip_prefix('/').unwrap_or(&key_full).split('/');
 
-        Ok(match params.get(key_path) {
-            Some(value) => (1, format!("Parameter [{}]", &key_full), value.to_owned()),
+        Ok(match self.data.parameters.get(&key_full).await {
+            Some(value) => (
+                1,
+                format!("Parameter [{}]", &key_full),
+                value.try_to_value().unwrap(),
+            ),
             None => (
                 -1,
                 format!("Parameter [{}] is not set", &key_full),
@@ -1099,7 +953,7 @@ impl Handler for SearchParamHandler {
 
         // For an explanation of what the search algorithm does, see the comment in the original code:
         // https://github.com/ros/ros_comm/blob/9ae132c/tools/rosmaster/src/rosmaster/paramserver.py#L82
-        let params = self.data.parameters.read().unwrap().get_keys();
+        let params = self.data.parameters.get_keys().await;
         let key = key.strip_prefix('/').unwrap_or(&key);
         let key_first_element = key.split('/').next().unwrap_or("");
         let namespace = caller_id
@@ -1162,39 +1016,11 @@ impl Handler for SubscribeParamHandler {
 
         register_node(&self.data.nodes, &caller_id, &caller_api).await;
 
-        let mut new_subscription = Some(ParamSubscription {
-            node_id: caller_id.clone(),
-            param: key.clone(),
-            api_uri: caller_api,
-        });
-
-        {
-            // RwLock scope
-            let param_subscriptions = &mut self.data.parameter_subscriptions.write().unwrap();
-
-            // replace old entry if subscribing node has restarted
-            for subscription in param_subscriptions.iter_mut() {
-                if &subscription.node_id == &caller_id && &subscription.param == &key {
-                    let _ = std::mem::replace(subscription, new_subscription.take().unwrap());
-                    break;
-                }
-            }
-
-            // add a new entry if it's a new node id
-            if let Some(new_subscription) = new_subscription {
-                param_subscriptions.push(new_subscription)
-            }
-        }
-
-        let key_split = key.strip_prefix('/').unwrap_or(&key).split('/');
-
         let value = self
             .data
             .parameters
-            .read()
-            .unwrap()
-            .get(key_split)
-            .unwrap_or_else(|| crate::empty_struct());
+            .subscribe(caller_id, key.clone(), caller_api)
+            .await;
 
         Ok((1, &format!("Subscribed to parameter [{}]", &key), value).try_to_value()?)
     }
@@ -1228,16 +1054,7 @@ impl Handler for UnSubscribeParamHandler {
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
 
-        let mut parameter_subscriptions = self.data.parameter_subscriptions.write().unwrap();
-        let mut removed = false;
-        parameter_subscriptions.retain(|subscription| {
-            if subscription.api_uri == caller_api && subscription.param == key {
-                removed = true;
-                false
-            } else {
-                true
-            }
-        });
+        let removed = self.data.parameters.unsubscribe(caller_api, key).await;
         Ok((1, "", if removed { 1 } else { 0 }).try_to_value()?)
     }
 }
@@ -1280,7 +1097,7 @@ impl Handler for HasParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
-        let has = self.data.parameters.read().unwrap().contains(key);
+        let has = self.data.parameters.contains(key).await;
         Ok((1, "", has).try_to_value()?)
     }
 }
@@ -1313,7 +1130,7 @@ impl Handler for GetParamNamesHandler {
             a?;
         }
 
-        let keys: Vec<String> = self.data.parameters.read().unwrap().get_keys();
+        let keys: Vec<String> = self.data.parameters.get_keys().await;
         Ok((1, "", keys).try_to_value()?)
     }
 }
@@ -1406,10 +1223,7 @@ impl Master {
                 topics: RwLock::new(Topics::new()),
                 subscriptions: RwLock::new(Subscriptions::new()),
                 publications: RwLock::new(Publishers::new()),
-                parameters: RwLock::new(Parameters::HashMap(hashmap! {
-                    "run_id".to_owned() => run_id
-                })),
-                parameter_subscriptions: RwLock::new(Vec::new()),
+                parameters: ParamTree::new(run_id),
                 uri,
             }),
         }

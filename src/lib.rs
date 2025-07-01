@@ -20,7 +20,6 @@ pub mod client_api;
 pub mod core;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use url::Url;
-use dxr::{TryToValue, Value};
 
 pub mod param_tree;
 pub use param_tree::ParamValue;
@@ -35,8 +34,4 @@ pub fn url_to_socket_addr(url: &Url) -> anyhow::Result<SocketAddr> {
     };
     let port = url.port().expect("Invalid URL: no port specified");
     Ok(SocketAddr::new(ip_addr, port))
-}
-
-fn empty_struct() -> Value {
-    std::collections::HashMap::<String, i32>::new().try_to_value().unwrap()
 }
