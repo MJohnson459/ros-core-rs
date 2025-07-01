@@ -155,13 +155,19 @@ impl Handler for RegisterServiceHandler {
             .service_list
             .write()
             .unwrap()
-            .entry(service)
+            .entry(service.clone())
             .or_default()
             .insert(caller_id.clone(), service_api);
 
         register_node(&self.data.nodes, &caller_id, &caller_api).await;
 
-        Ok((1, String::from(""), 0).try_to_value()?)
+        let status = format!("Registered [{caller_id}] as provider of [{service}]");
+        log::debug!(
+            "RegisterServiceHandler {:?} returns (1, {status}, 1)",
+            params
+        );
+
+        Ok((1, status, 1).try_to_value()?)
     }
 }
 
@@ -245,7 +251,12 @@ impl Handler for UnRegisterServiceHandler {
             service_list.remove(&service);
         }
 
-        Ok((1, "", if removed { 1 } else { 0 }).try_to_value()?)
+        let status = if removed {
+            format!("Unregistered [{caller_id}] as provider of [{service}]")
+        } else {
+            format!("[{caller_id}] is not a registered node")
+        };
+        Ok((1, status, if removed { 1 } else { 0 }).try_to_value()?)
     }
 }
 
@@ -308,7 +319,8 @@ impl Handler for RegisterSubscriberHandler {
             .filter_map(|p| nodes.get(p).cloned())
             .collect();
 
-        return Ok((1, "", publisher_apis).try_to_value()?);
+        let status = format!("Subscribed to [{topic}]");
+        return Ok((1, status, publisher_apis).try_to_value()?);
     }
 }
 
@@ -357,7 +369,12 @@ impl Handler for UnRegisterSubscriberHandler {
             .unwrap()
             .retain(|_, v| !v.is_empty());
 
-        Ok((1, "", if removed { 1 } else { 0 }).try_to_value()?)
+        let status = if removed {
+            format!("Unregistered [{caller_id}] as provider of [{topic}]")
+        } else {
+            format!("[{caller_id}] is not a registered node")
+        };
+        Ok((1, status, if removed { 1 } else { 0 }).try_to_value()?)
     }
 }
 
@@ -462,7 +479,8 @@ impl Handler for RegisterPublisherHandler {
             }
         }
 
-        return Ok((1, "", subscribers_api_urls).try_to_value()?);
+        let status = format!("Registered [{caller_id}] as publisher of [{topic}]");
+        return Ok((1, status, subscribers_api_urls).try_to_value()?);
     }
 }
 
@@ -505,7 +523,7 @@ impl Handler for UnRegisterPublisherHandler {
             .get(&topic.clone())
             .is_none()
         {
-            return Ok((1, String::from(""), 0).try_to_value()?);
+            return Ok((1, format!("[{caller_id}] is not a registered node"), 0).try_to_value()?);
         }
         let removed = self
             .data
@@ -520,7 +538,13 @@ impl Handler for UnRegisterPublisherHandler {
             .write()
             .unwrap()
             .retain(|_, v| !v.is_empty());
-        Ok((1, "", if removed { 1 } else { 0 }).try_to_value()?)
+
+        let status = if removed {
+            format!("Unregistered [{caller_id}] as provider of [{topic}]")
+        } else {
+            format!("[{caller_id}] is not a registered node")
+        };
+        Ok((1, status, if removed { 1 } else { 0 }).try_to_value()?)
     }
 }
 
@@ -553,8 +577,8 @@ impl Handler for LookupNodeHandler {
         if let Some(node_api) = self.data.nodes.read().unwrap().get(&node_name) {
             return Ok((1, "", node_api).try_to_value()?);
         } else {
-            let err_msg = format!("node {} not found", node_name);
-            return Ok((0, err_msg, "").try_to_value()?);
+            let err_msg = format!("unknown node [{}]", node_name);
+            return Ok((-1, err_msg, "").try_to_value()?);
         }
     }
 }
@@ -594,7 +618,7 @@ impl Handler for GetPublishedTopicsHandler {
                 result.push((topic.clone(), data_type.to_owned()));
             }
         }
-        return Ok((1, "", result).try_to_value()?);
+        return Ok((1, "current topics", result).try_to_value()?);
     }
 }
 
@@ -630,7 +654,7 @@ impl Handler for GetTopicTypesHandler {
             .into_iter()
             .map(|(k, v)| (k, v))
             .collect();
-        return Ok((1, "", result).try_to_value()?);
+        return Ok((1, "current system state", result).try_to_value()?);
     }
 }
 
@@ -756,7 +780,7 @@ impl Handler for GetPidHandler {
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
         let result = std::process::id() as i32; // max pid on linux is 2^22, so the typecast should have no unintended side effects
-        return Ok((1, "", (result,)).try_to_value()?);
+        return Ok((1, "", result).try_to_value()?);
     }
 }
 
@@ -798,24 +822,14 @@ impl Handler for LookupServiceHandler {
         if services.is_some() {
             let services = services.unwrap();
             if services.is_empty() {
-                return Ok((
-                    0,
-                    "`no providers for service \"{service}\"`".to_string(),
-                    "",
-                )
-                    .try_to_value()?);
+                return Ok((-1, "no provider".to_string(), "").try_to_value()?);
             } else {
                 let service_url = services.values().next().unwrap();
                 return Ok((1, "".to_string(), service_url.clone()).try_to_value()?);
             }
         }
 
-        return Ok((
-            0,
-            "`no providers for service \"{service}\"`".to_string(),
-            "",
-        )
-            .try_to_value()?);
+        return Ok((-1, "no provider".to_string(), "").try_to_value()?);
     }
 }
 
@@ -845,9 +859,11 @@ impl Handler for DeleteParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
-        self.data.parameters.delete(key, caller_id).await;
+        self.data.parameters.delete(&key, caller_id).await;
 
-        return Ok((1, "", 0).try_to_value()?);
+        let status = format!("parameter {} deleted", &key);
+        log::debug!("DeleteParamHandler {:?} returns (1, {status}, 0)", params,);
+        return Ok((1, status, 0).try_to_value()?);
     }
 }
 
@@ -884,13 +900,13 @@ impl Handler for SetParamHandler {
 
         self.data
             .parameters
-            .set(key.clone(), ParamValue::Value(value), caller_id)
+            .set(&key, ParamValue::Value(value), caller_id)
             .await;
         let status = format!("parameter {} set", &key);
 
         log::info!("SetParam({params:?}) returns (1, {status}, 0)");
 
-        Ok((1, "", 0).try_to_value()?)
+        Ok((1, status, 0).try_to_value()?)
     }
 }
 
@@ -982,7 +998,7 @@ impl Handler for SearchParamHandler {
             param_name.push_str(path);
         }
 
-        Ok((1, "", param_name).try_to_value()?)
+        Ok((1, format!("Found [{}]", param_name), param_name).try_to_value()?)
     }
 }
 
@@ -1054,8 +1070,17 @@ impl Handler for UnSubscribeParamHandler {
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
 
-        let removed = self.data.parameters.unsubscribe(caller_api, key).await;
-        Ok((1, "", if removed { 1 } else { 0 }).try_to_value()?)
+        let removed = self
+            .data
+            .parameters
+            .unsubscribe(caller_api, key.clone())
+            .await;
+        let status = if removed {
+            format!("Unsubscribe to parameter [{}]", key)
+        } else {
+            "".to_string()
+        };
+        Ok((1, status, if removed { 1 } else { 0 }).try_to_value()?)
     }
 }
 
@@ -1097,8 +1122,9 @@ impl Handler for HasParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
-        let has = self.data.parameters.contains(key).await;
-        Ok((1, "", has).try_to_value()?)
+        let has = self.data.parameters.contains(&key).await;
+        log::debug!("HasParamHandler {:?} returns (1, \"\", {})", params, has);
+        Ok((1, key, has).try_to_value()?)
     }
 }
 
@@ -1131,7 +1157,7 @@ impl Handler for GetParamNamesHandler {
         }
 
         let keys: Vec<String> = self.data.parameters.get_keys().await;
-        Ok((1, "", keys).try_to_value()?)
+        Ok((1, "Parameter names", keys).try_to_value()?)
     }
 }
 

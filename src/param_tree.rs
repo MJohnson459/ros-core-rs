@@ -67,7 +67,7 @@ impl ParamTree {
         params.get_keys()
     }
 
-    pub async fn contains(&self, key: String) -> bool {
+    pub async fn contains(&self, key: &str) -> bool {
         let params = self.params.read().await;
         params.contains(key)
     }
@@ -78,7 +78,7 @@ impl ParamTree {
         params.get(key_path)
     }
 
-    pub async fn set(&self, key: String, value: ParamValue, caller_id: String) {
+    pub async fn set(&self, key: &str, value: ParamValue, caller_id: String) {
         if key == "/" {
             if matches!(value, ParamValue::HashMap(_)) {
                 let mut params = self.params.write().await;
@@ -95,7 +95,7 @@ impl ParamTree {
         self.update_subscribers(key, caller_id).await;
     }
 
-    pub async fn delete(&self, key: String, caller_id: String) {
+    pub async fn delete(&self, key: &str, caller_id: String) {
         let key_split = key.strip_prefix('/').unwrap_or(&key).split('/');
         let mut params = self.params.write().await;
         params.remove(key_split);
@@ -142,7 +142,7 @@ impl ParamTree {
         removed
     }
 
-    async fn update_subscribers(&self, key: String, caller_id: String) {
+    async fn update_subscribers(&self, key: &str, caller_id: String) {
         let mut update_futures = JoinSet::new();
         let param_subscriptions = self.param_subscriptions.read().await;
         for subscription in param_subscriptions.iter() {
@@ -260,7 +260,7 @@ impl ParamValue {
         }
     }
 
-    pub fn contains(&self, key: String) -> bool {
+    pub fn contains(&self, key: &str) -> bool {
         let key = key.split('/');
         self.get(key).is_some()
     }

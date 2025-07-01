@@ -43,7 +43,7 @@ fn get_uri() -> String {
         "127.0.0.1".to_string()
     });
 
-    format!("http://{}:11311", addr)
+    format!("http://{}:11311/", addr)
 }
 
 fn get_bind_address() -> std::net::SocketAddr {
