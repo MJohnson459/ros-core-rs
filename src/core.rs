@@ -1477,13 +1477,6 @@ fn get_node_id() -> Option<[u8; 6]> {
 
 impl Master {
     pub fn new(uri: String) -> Master {
-        let run_id = ParamValue::Value(Value::string(
-            uuid::Uuid::new_v1(
-                uuid::Timestamp::now(Context::new_random()),
-                &get_node_id().unwrap_or_default(),
-            )
-            .to_string(),
-        ));
         Master {
             data: Arc::new(RosData {
                 service_list: RwLock::new(Services::new()),
@@ -1491,7 +1484,7 @@ impl Master {
                 topics: RwLock::new(Topics::new()),
                 subscriptions: RwLock::new(Subscriptions::new()),
                 publications: RwLock::new(Publishers::new()),
-                parameters: ParamTree::new(run_id),
+                parameters: ParamTree::new(),
                 uri,
             }),
         }

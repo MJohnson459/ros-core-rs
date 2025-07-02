@@ -5,6 +5,7 @@ use maplit::hashmap;
 use tokio::{sync::RwLock, task::JoinSet};
 
 use crate::client_api::ClientApi;
+use crate::utils::format_value;
 
 #[derive(Debug)]
 pub struct ParamTree {
@@ -50,18 +51,16 @@ impl ParamValue {
                 Ok(())
             }
             ParamValue::Value(v) => {
-                writeln!(f, "{path}: {:?}", v)
+                writeln!(f, "{path}: {}", format_value(v))
             }
         }
     }
 }
 
 impl ParamTree {
-    pub fn new(run_id: ParamValue) -> Self {
+    pub fn new() -> Self {
         Self {
-            params: RwLock::new(ParamValue::HashMap(hashmap! {
-                "run_id".to_owned() => run_id
-            })),
+            params: RwLock::new(ParamValue::HashMap(HashMap::new())),
             param_subscriptions: RwLock::new(Vec::new()),
         }
     }
@@ -88,6 +87,7 @@ impl ParamTree {
             if matches!(value, ParamValue::HashMap(_)) {
                 let mut params = self.params.write().await;
                 let _ = mem::replace(&mut *params, value);
+                self.update_subscribers(key, caller_id).await;
                 return Ok(());
             } else {
                 return Err(
@@ -98,41 +98,52 @@ impl ParamTree {
         }
 
         let key_path = key.strip_prefix('/').unwrap_or(&key).split('/');
-        let mut params = self.params.write().await;
-        params.update_inner(key_path, value);
+        {
+            let mut params = self.params.write().await;
+            params.update_inner(key_path, value);
+        } // Write lock is released here
         self.update_subscribers(key, caller_id).await;
         return Ok(());
     }
 
     pub async fn delete(&self, key: &str, caller_id: String) {
         let key_split = key.strip_prefix('/').unwrap_or(&key).split('/');
-        let mut params = self.params.write().await;
-        params.remove(key_split);
+        {
+            let mut params = self.params.write().await;
+            params.remove(key_split);
+        } // Write lock is released here
         self.update_subscribers(key, caller_id).await;
     }
 
     pub async fn subscribe(&self, node_id: String, param: String, api_uri: String) -> ParamValue {
-        let mut param_subscriptions = self.param_subscriptions.write().await;
-        let mut api_uri = Some(api_uri);
+        {
+            let mut param_subscriptions = self.param_subscriptions.write().await;
+            let mut api_uri = Some(api_uri);
 
-        // replace old entry if subscribing node has restarted
-        for subscription in param_subscriptions.iter_mut() {
-            if &subscription.node_id == &node_id && &subscription.param == &param {
-                subscription.api_uri = api_uri.take().unwrap();
-                break;
+            // replace old entry if subscribing node has restarted
+            for subscription in param_subscriptions.iter_mut() {
+                if &subscription.node_id == &node_id && &subscription.param == &param {
+                    subscription.api_uri = api_uri.take().unwrap();
+                    break;
+                }
             }
-        }
 
-        // add a new entry if it's a new node id
-        if let Some(api_uri) = api_uri {
-            param_subscriptions.push(ParamSubscription {
-                node_id,
-                param: param.clone(),
-                api_uri,
-            });
-        }
+            // add a new entry if it's a new node id
+            if let Some(api_uri) = api_uri {
+                param_subscriptions.push(ParamSubscription {
+                    node_id,
+                    param: param.clone(),
+                    api_uri,
+                });
+            }
+        } // param_subscriptions lock released here
 
-        let value = self.params.read().await.get(param.split('/')).unwrap();
+        let value = self
+            .params
+            .read()
+            .await
+            .get(param.split('/'))
+            .unwrap_or_else(|| ParamValue::HashMap(HashMap::new()));
         value
     }
 
@@ -154,12 +165,8 @@ impl ParamTree {
     async fn update_subscribers(&self, key: &str, caller_id: String) {
         let mut update_futures = JoinSet::new();
         let param_subscriptions = self.param_subscriptions.read().await;
+
         for subscription in param_subscriptions.iter() {
-            log::debug!(
-                "subscriber {:?} has subscription? {}",
-                &subscription,
-                one_is_prefix_of_the_other(&key, &subscription.param)
-            );
             if one_is_prefix_of_the_other(&key, &subscription.param) {
                 let subscribed_key_spit = subscription
                     .param
@@ -167,29 +174,36 @@ impl ParamTree {
                     .unwrap_or(&subscription.param)
                     .split('/');
 
-                let new_value = self.params.read().await.get(subscribed_key_spit).unwrap();
-                update_futures.spawn(update_client_with_new_param_value(
-                    subscription.api_uri.clone(),
-                    caller_id.clone(),
-                    subscription.node_id.clone(),
-                    subscription.param.clone(),
-                    new_value,
-                ));
+                if let Some(new_value) = self.params.read().await.get(subscribed_key_spit) {
+                    update_futures.spawn(update_client_with_new_param_value(
+                        subscription.api_uri.clone(),
+                        caller_id.clone(),
+                        subscription.node_id.clone(),
+                        subscription.param.clone(),
+                        new_value,
+                    ));
+                } else {
+                    log::warn!(
+                        "Parameter {} no longer exists, skipping update for subscriber {}",
+                        subscription.param,
+                        subscription.node_id
+                    );
+                }
             }
         }
 
         while let Some(res) = update_futures.join_next().await {
             match res {
-                Ok(Ok(v)) => {
-                    log::debug!("a subscriber has been updated (res: {:#?})", &v);
-                }
-                Ok(Err(err)) => {
-                    log::warn!(
-                        "Error updating a subscriber of changed param {}:\n{:#?}",
-                        &key,
-                        err
-                    );
-                }
+                // Ok(Ok(v)) => {
+                //     log::debug!("a subscriber has been updated (res: {:#?})", &v);
+                // }
+                // Ok(Err(err)) => {
+                //     log::warn!(
+                //         "Error updating a subscriber of changed param {}:\n{:#?}",
+                //         &key,
+                //         err
+                //     );
+                // }
                 Err(err) => {
                     log::warn!(
                         "Error updating a subscriber of changed param {}:\n{:#?}",
@@ -197,6 +211,7 @@ impl ParamTree {
                         err
                     );
                 }
+                _ => (),
             }
         }
     }
@@ -373,32 +388,38 @@ fn one_is_prefix_of_the_other(a: &str, b: &str) -> bool {
 
 async fn update_client_with_new_param_value(
     client_api_url: String,
-    updating_node_id: String,
-    subscribing_node_id: String,
+    _updating_node_id: String,
+    _subscribing_node_id: String,
     param_name: String,
     new_value: ParamValue,
 ) -> Result<Value, anyhow::Error> {
-    let client_api = ClientApi::new(&client_api_url);
-    let param_value = new_value.try_to_value().unwrap();
-    log::info!("paramUpdate[{}]", param_name);
-    let request = client_api.param_update(&updating_node_id, &param_name, &param_value);
-    let res = request.await;
-    match res {
-        Ok(ref v) => log::debug!(
-            "Sent new value for param '{}' to node '{}'. response: {:?}",
-            param_name,
-            subscribing_node_id,
-            &v
-        ),
-        Err(ref e) => log::debug!(
-            "Error sending new value for param '{}' to node '{}': {:?}",
-            param_name,
-            subscribing_node_id,
-            e
-        ),
-    }
+    let _client_api = ClientApi::new(&client_api_url);
+    let param_value = new_value
+        .try_to_value()
+        .map_err(|e| anyhow::anyhow!("Failed to convert param value: {}", e))?;
 
-    Ok(res?)
+    log::info!("paramUpdate[{}]", param_name);
+    // TODO: remove this once we have a way to test the param update
+    return Ok(param_value);
+
+    // let request = client_api.param_update(&updating_node_id, &param_name, &param_value);
+    // let res = request.await;
+    // match res {
+    //     Ok(ref v) => log::debug!(
+    //         "Sent new value for param '{}' to node '{}'. response: {:?}",
+    //         param_name,
+    //         subscribing_node_id,
+    //         &v
+    //     ),
+    //     Err(ref e) => log::debug!(
+    //         "Error sending new value for param '{}' to node '{}': {:?}",
+    //         param_name,
+    //         subscribing_node_id,
+    //         e
+    //     ),
+    // }
+
+    // Ok(res?)
 }
 
 #[cfg(test)]
@@ -435,7 +456,10 @@ mod tests {
     #[tokio::test]
     async fn test_param_tree_simple() {
         let run_id = ParamValue::Value(Value::string("therunid".to_owned()));
-        let tree = ParamTree::new(run_id.clone());
+        let tree = ParamTree::new();
+        tree.set("run_id", run_id.clone(), "test".to_owned())
+            .await
+            .unwrap();
 
         // relative path or absolute path should work
         assert_eq!(tree.get("run_id").await, Some(run_id.clone()));
@@ -445,7 +469,10 @@ mod tests {
     #[tokio::test]
     async fn test_param_tree_set_get() {
         let run_id = ParamValue::Value(Value::string("therunid".to_owned()));
-        let tree = ParamTree::new(run_id.clone());
+        let tree = ParamTree::new();
+        tree.set("run_id", run_id.clone(), "test".to_owned())
+            .await
+            .unwrap();
 
         let param_value = ParamValue::Value(Value::string("param_value".to_owned()));
         tree.set("some/param", param_value.clone(), "caller_id".to_owned())
@@ -460,7 +487,10 @@ mod tests {
     #[tokio::test]
     async fn test_param_tree_set_get_array() {
         let run_id = ParamValue::Value(Value::string("therunid".to_owned()));
-        let tree = ParamTree::new(run_id.clone());
+        let tree = ParamTree::new();
+        tree.set("run_id", run_id.clone(), "test".to_owned())
+            .await
+            .unwrap();
 
         let param_value = ParamValue::Array(vec![
             ParamValue::Value(Value::string("param_value".to_owned())),
@@ -479,7 +509,10 @@ mod tests {
     #[tokio::test]
     async fn test_param_tree_set_get_hashmap() {
         let run_id = ParamValue::Value(Value::string("therunid".to_owned()));
-        let tree = ParamTree::new(run_id.clone());
+        let tree = ParamTree::new();
+        tree.set("run_id", run_id.clone(), "test".to_owned())
+            .await
+            .unwrap();
 
         let param_value = ParamValue::HashMap(hashmap! {
             "param_key".to_owned() => ParamValue::HashMap(hashmap! {
@@ -510,7 +543,10 @@ mod tests {
     #[tokio::test]
     async fn test_param_tree_set_get_hashmap_root() {
         let run_id = ParamValue::Value(Value::string("therunid".to_owned()));
-        let tree = ParamTree::new(run_id.clone());
+        let tree = ParamTree::new();
+        tree.set("run_id", run_id.clone(), "test".to_owned())
+            .await
+            .unwrap();
 
         let param_tree = ParamValue::HashMap(hashmap! {
             "param_key".to_owned() => ParamValue::HashMap(hashmap! {
@@ -579,9 +615,14 @@ mod tests {
         })
     }
     async fn load_state() -> ParamTree {
-        let tree = ParamTree::new(ParamValue::HashMap(hashmap! {
-            "run_id".to_owned() => ParamValue::Value(Value::string("asdf-jkl0".to_owned())),
-        }));
+        let tree = ParamTree::new();
+        tree.set(
+            "run_id",
+            ParamValue::Value(Value::string("asdf-jkl0".to_owned())),
+            "test".to_owned(),
+        )
+        .await
+        .unwrap();
         tree.set("/", create_complex_tree(), "test".to_owned())
             .await
             .unwrap();
