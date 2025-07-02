@@ -30,6 +30,11 @@ futures = "0.3.31"
 uuid = { version = "1.16.0", features = ["v1", "rng"] }
 clap = { version = "4.0", features = ["derive"] }
 hostname = "0.4.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ctrlc = "3.4"
+async-trait = "0.1"
+axum = "0.7"
 
 [dev-dependencies]
 rosrust = "0.9"
@@ -44,12 +49,4 @@ doctest = []
 
 [[bench]]
 name = "param_tree"
-harness = false
-
-[[bin]]
-name = "ros_master_benchmark"
-harness = false
-
-[[bin]]
-name = "ros_master_comparison"
 harness = false

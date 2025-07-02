@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
-use dxr::Value;
+use dxr::{TryToValue, Value};
+use maplit::hashmap;
 use ros_core_rs::core::MasterClient;
 use url::Url;
 
@@ -165,22 +166,220 @@ impl TestData {
             | Endpoint::HasParam
             | Endpoint::SubscribeParam
             | Endpoint::UnsubscribeParam => vec![
+                // Real ROS parameters from the log
                 Self {
-                    param_key: "/test_param1".to_string(),
-                    param_value: Value::string("value1".to_string()),
-                    description: "param_key=/test_param1, value=value1".to_string(),
+                    param_key: "/run_id".to_string(),
+                    param_value: Value::string("8a5f9a92-5696-11f0-91fc-093df97d2ac5".to_string()),
+                    description: "param_key=/run_id, value=uuid".to_string(),
                     ..Self::default()
                 },
                 Self {
-                    param_key: "/test_param2".to_string(),
-                    param_value: Value::i4(42),
-                    description: "param_key=/test_param2, value=42".to_string(),
-                    ..Self::default()
-                },
-                Self {
-                    param_key: "/test_param3".to_string(),
+                    param_key: "/rosout_disable_topics_generation".to_string(),
                     param_value: Value::boolean(true),
-                    description: "param_key=/test_param3, value=true".to_string(),
+                    description: "param_key=/rosout_disable_topics_generation, value=true".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/rosversion".to_string(),
+                    param_value: Value::string("1.23.0\n".to_string()),
+                    description: "param_key=/rosversion, value=1.23.0".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/rosdistro".to_string(),
+                    param_value: Value::string("locusrobotics-hotdog-dev\n".to_string()),
+                    description: "param_key=/rosdistro, value=locusrobotics-hotdog-dev".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/robot_lister/hb_timeout".to_string(),
+                    param_value: Value::i4(30),
+                    description: "param_key=/robot_lister/hb_timeout, value=30".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/dock_blocked_timeout".to_string(),
+                    param_value: Value::i4(300),
+                    description: "param_key=/resource_manager/dock_blocked_timeout, value=300".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/dock_choice_strategy".to_string(),
+                    param_value: Value::string("random".to_string()),
+                    description: "param_key=/resource_manager/dock_choice_strategy, value=random".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/universal_queue_range".to_string(),
+                    param_value: Value::double(3.0),
+                    description: "param_key=/resource_manager/universal_queue_range, value=3.0".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/location_footprint_factor".to_string(),
+                    param_value: Value::double(1.2),
+                    description: "param_key=/resource_manager/location_footprint_factor, value=1.2".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/robot_moved_threshold".to_string(),
+                    param_value: Value::double(0.03),
+                    description: "param_key=/resource_manager/robot_moved_threshold, value=0.03".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/robot_still_timeout".to_string(),
+                    param_value: Value::double(0.5),
+                    description: "param_key=/resource_manager/robot_still_timeout, value=0.5".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/use_resource_service_relays".to_string(),
+                    param_value: Value::boolean(true),
+                    description: "param_key=/resource_manager/use_resource_service_relays, value=true".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/resource_manager/locus_net_url".to_string(),
+                    param_value: Value::string("http://localhost:5001/locusnet/botapi".to_string()),
+                    description: "param_key=/resource_manager/locus_net_url, value=http://localhost:5001/locusnet/botapi".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/start_tycho_bridge/tycho_api_url".to_string(),
+                    param_value: Value::string("https://staging.fleet.locusbots.io/api".to_string()),
+                    description: "param_key=/start_tycho_bridge/tycho_api_url, value=https://staging.fleet.locusbots.io/api".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/start_tycho_bridge/tycho_username".to_string(),
+                    param_value: Value::string("locus-services".to_string()),
+                    description: "param_key=/start_tycho_bridge/tycho_username, value=locus-services".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/start_tycho_bridge/tycho_password".to_string(),
+                    param_value: Value::string("DULYZNA9C7".to_string()),
+                    description: "param_key=/start_tycho_bridge/tycho_password, value=DULYZNA9C7".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/central_router/reroute_interval_s".to_string(),
+                    param_value: Value::i4(30),
+                    description: "param_key=/central_router/reroute_interval_s, value=30".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/central_router/enable_temporal_topo_routing".to_string(),
+                    param_value: Value::boolean(true),
+                    description: "param_key=/central_router/enable_temporal_topo_routing, value=true".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/central_router/zone_occupancy_cost".to_string(),
+                    param_value: Value::i4(200),
+                    description: "param_key=/central_router/zone_occupancy_cost, value=200".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/nearby_bump_bagger/distance_threshold".to_string(),
+                    param_value: Value::double(2.0),
+                    description: "param_key=/nearby_bump_bagger/distance_threshold, value=2.0".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/nearby_bump_bagger/state_timeout".to_string(),
+                    param_value: Value::double(15.0),
+                    description: "param_key=/nearby_bump_bagger/state_timeout, value=15.0".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/diag_agg_wrangler/pub_rate".to_string(),
+                    param_value: Value::double(1.0),
+                    description: "param_key=/diag_agg_wrangler/pub_rate, value=1.0".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/adjutare_rosbridge_websocket_0/port".to_string(),
+                    param_value: Value::i4(9090),
+                    description: "param_key=/adjutare_rosbridge_websocket_0/port, value=9090".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/adjutare_rosbridge_websocket_0/use_compression".to_string(),
+                    param_value: Value::boolean(true),
+                    description: "param_key=/adjutare_rosbridge_websocket_0/use_compression, value=true".to_string(),
+                    ..Self::default()
+                },
+                // Test cases for non-existent parameters
+                Self {
+                    param_key: "/use_sim_time".to_string(),
+                    param_value: Value::boolean(false),
+                    description: "param_key=/use_sim_time, value=false (non-existent)".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/tcp_keepalive".to_string(),
+                    param_value: Value::boolean(false),
+                    description: "param_key=/tcp_keepalive, value=false (non-existent)".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/enable_statistics".to_string(),
+                    param_value: Value::boolean(false),
+                    description: "param_key=/enable_statistics, value=false (non-existent)".to_string(),
+                    ..Self::default()
+                },
+                // Test for subscribeParam with "/" key to get all parameters
+                Self {
+                    param_key: "/".to_string(),
+                    param_value: Value::string("".to_string()),
+                    description: "param_key=/, subscribeParam to get all parameters".to_string(),
+                    ..Self::default()
+                },
+                // Test for dynamic/namespaced parameter keys
+                Self {
+                    param_key: "/roslaunch/uris/host_xxx".to_string(),
+                    param_value: Value::string("http://localhost:11311".to_string()),
+                    description: "param_key=/roslaunch/uris/host_xxx, dynamic namespaced key".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/roslaunch/uris/host_yyy".to_string(),
+                    param_value: Value::string("http://localhost:11312".to_string()),
+                    description: "param_key=/roslaunch/uris/host_yyy, dynamic namespaced key".to_string(),
+                    ..Self::default()
+                },
+                // Test for setParam with dictionary value (nested structure)
+                Self {
+                    param_key: "/robot_config".to_string(),
+                    param_value: hashmap! {
+                        "name".to_string() => Value::string("robot_001".to_string()),
+                        "type".to_string() => Value::string("AMR".to_string()),
+                        "capabilities".to_string() => vec![
+                            Value::string("navigation".to_string()),
+                            Value::string("manipulation".to_string()),
+                        ].try_to_value().unwrap(),
+                        "settings".to_string() => hashmap! {
+                            "max_speed".to_string() => Value::double(2.0),
+                            "battery_threshold".to_string() => Value::double(0.2),
+                            "enabled".to_string() => Value::boolean(true),
+                        }.try_to_value().unwrap(),
+                    }.try_to_value().unwrap(),
+                    description: "param_key=/robot_config, nested dictionary value".to_string(),
+                    ..Self::default()
+                },
+                // Test for getParam on non-existent parameter
+                Self {
+                    param_key: "/non_existent_parameter_12345".to_string(),
+                    param_value: Value::string("".to_string()),
+                    description: "param_key=/non_existent_parameter_12345, getParam on non-existent".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    param_key: "/another_missing_param".to_string(),
+                    param_value: Value::string("".to_string()),
+                    description: "param_key=/another_missing_param, getParam on non-existent".to_string(),
                     ..Self::default()
                 },
             ],
@@ -190,50 +389,467 @@ impl TestData {
             | Endpoint::UnregisterSubscriber
             | Endpoint::GetPublishedTopics
             | Endpoint::GetTopicTypes => vec![
+                // Real topics from the log
                 Self {
-                    topic: "/test_topic1".to_string(),
-                    topic_type: "std_msgs/String".to_string(),
-                    description: "topic=/test_topic1, type=std_msgs/String".to_string(),
+                    topic: "/rosout".to_string(),
+                    topic_type: "rosgraph_msgs/Log".to_string(),
+                    description: "topic=/rosout, type=rosgraph_msgs/Log".to_string(),
                     ..Self::default()
                 },
                 Self {
-                    topic: "/test_topic2".to_string(),
-                    topic_type: "std_msgs/Int32".to_string(),
-                    description: "topic=/test_topic2, type=std_msgs/Int32".to_string(),
+                    topic: "/rosout_agg".to_string(),
+                    topic_type: "rosgraph_msgs/Log".to_string(),
+                    description: "topic=/rosout_agg, type=rosgraph_msgs/Log".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/test/robot_charge".to_string(),
+                    topic_type: "locus_test_msgs/RobotCharge".to_string(),
+                    description: "topic=/test/robot_charge, type=locus_test_msgs/RobotCharge".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/test/robot_error".to_string(),
+                    topic_type: "locus_test_msgs/RobotError".to_string(),
+                    description: "topic=/test/robot_error, type=locus_test_msgs/RobotError".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/test/robot_maintenance".to_string(),
+                    topic_type: "locus_test_msgs/RobotMaintenance".to_string(),
+                    description: "topic=/test/robot_maintenance, type=locus_test_msgs/RobotMaintenance".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/test/robot_status".to_string(),
+                    topic_type: "locus_test_msgs/RobotStatus".to_string(),
+                    description: "topic=/test/robot_status, type=locus_test_msgs/RobotStatus".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/test/robot_stop".to_string(),
+                    topic_type: "locus_test_msgs/RobotStop".to_string(),
+                    description: "topic=/test/robot_stop, type=locus_test_msgs/RobotStop".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/test/scenario_steps".to_string(),
+                    topic_type: "locus_test_msgs/ScenarioStep".to_string(),
+                    description: "topic=/test/scenario_steps, type=locus_test_msgs/ScenarioStep".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/robot_names".to_string(),
+                    topic_type: "locus_msgs/StringList".to_string(),
+                    description: "topic=/robot_names, type=locus_msgs/StringList".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/robot_info_array".to_string(),
+                    topic_type: "locus_msgs/RobotInfoArray".to_string(),
+                    description: "topic=/robot_info_array, type=locus_msgs/RobotInfoArray".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/global_states".to_string(),
+                    topic_type: "locus_msgs/GlobalStateArray".to_string(),
+                    description: "topic=/global_states, type=locus_msgs/GlobalStateArray".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/heartbeats".to_string(),
+                    topic_type: "std_msgs/Header".to_string(),
+                    description: "topic=/heartbeats, type=std_msgs/Header".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/tycho/current_site_config_local".to_string(),
+                    topic_type: "*".to_string(),
+                    description: "topic=/tycho/current_site_config_local, type=*".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/tycho/map".to_string(),
+                    topic_type: "*".to_string(),
+                    description: "topic=/tycho/map, type=*".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/central_router/snapshots".to_string(),
+                    topic_type: "locus_msgs/TopoSearchQuery".to_string(),
+                    description: "topic=/central_router/snapshots, type=locus_msgs/TopoSearchQuery".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/diagnostics_wrangler".to_string(),
+                    topic_type: "diagnostic_msgs/DiagnosticArray".to_string(),
+                    description: "topic=/diagnostics_wrangler, type=diagnostic_msgs/DiagnosticArray".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/diagnostics_toplevel_state".to_string(),
+                    topic_type: "diagnostic_msgs/DiagnosticStatus".to_string(),
+                    description: "topic=/diagnostics_toplevel_state, type=diagnostic_msgs/DiagnosticStatus".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    topic: "/adjutare/global_states".to_string(),
+                    topic_type: "locus_msgs/GlobalStateArray".to_string(),
+                    description: "topic=/adjutare/global_states, type=locus_msgs/GlobalStateArray".to_string(),
                     ..Self::default()
                 },
             ],
             Endpoint::RegisterService | Endpoint::UnRegisterService | Endpoint::LookupService => {
                 vec![
+                    // Real services from the log
                     Self {
-                        service: "/test_service1".to_string(),
-                        service_api: "http://localhost:12345".to_string(),
-                        description: "service=/test_service1, api=http://localhost:12345"
-                            .to_string(),
+                        service: "/rosout/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:46041".to_string(),
+                        description: "service=/rosout/get_loggers, api=rosrpc://LOCLAP858:46041".to_string(),
                         ..Self::default()
                     },
                     Self {
-                        service: "/test_service2".to_string(),
-                        service_api: "http://localhost:12346".to_string(),
-                        description: "service=/test_service2, api=http://localhost:12346"
-                            .to_string(),
+                        service: "/rosout/set_logger_level".to_string(),
+                        service_api: "rosrpc://LOCLAP858:46041".to_string(),
+                        description: "service=/rosout/set_logger_level, api=rosrpc://LOCLAP858:46041".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/robot_lister/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:48547".to_string(),
+                        description: "service=/robot_lister/get_loggers, api=rosrpc://LOCLAP858:48547".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/robot_lister/set_logger_level".to_string(),
+                        service_api: "rosrpc://LOCLAP858:48547".to_string(),
+                        description: "service=/robot_lister/set_logger_level, api=rosrpc://LOCLAP858:48547".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/global_state_aggregator/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:36461".to_string(),
+                        description: "service=/global_state_aggregator/get_loggers, api=rosrpc://LOCLAP858:36461".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/global_state_aggregator/set_logger_level".to_string(),
+                        service_api: "rosrpc://LOCLAP858:36461".to_string(),
+                        description: "service=/global_state_aggregator/set_logger_level, api=rosrpc://LOCLAP858:36461".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/reset_global_states_connection".to_string(),
+                        service_api: "rosrpc://LOCLAP858:36461".to_string(),
+                        description: "service=/reset_global_states_connection, api=rosrpc://LOCLAP858:36461".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/executive_server_service_relay/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:45677".to_string(),
+                        description: "service=/executive_server_service_relay/get_loggers, api=rosrpc://LOCLAP858:45677".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/resource_manager/resource/request".to_string(),
+                        service_api: "rosrpc://LOCLAP858:45677".to_string(),
+                        description: "service=/resource_manager/resource/request, api=rosrpc://LOCLAP858:45677".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/resource_manager/resource/release".to_string(),
+                        service_api: "rosrpc://LOCLAP858:45677".to_string(),
+                        description: "service=/resource_manager/resource/release, api=rosrpc://LOCLAP858:45677".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/resource_manager/resource/error".to_string(),
+                        service_api: "rosrpc://LOCLAP858:45677".to_string(),
+                        description: "service=/resource_manager/resource/error, api=rosrpc://LOCLAP858:45677".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/resource_manager/local/resource/query".to_string(),
+                        service_api: "rosrpc://LOCLAP858:45677".to_string(),
+                        description: "service=/resource_manager/local/resource/query, api=rosrpc://LOCLAP858:45677".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/resource_manager/local/resource/update".to_string(),
+                        service_api: "rosrpc://LOCLAP858:45677".to_string(),
+                        description: "service=/resource_manager/local/resource/update, api=rosrpc://LOCLAP858:45677".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/tycho_bridge_current_site_config_relay/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:41745".to_string(),
+                        description: "service=/tycho_bridge_current_site_config_relay/get_loggers, api=rosrpc://LOCLAP858:41745".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/tycho_map_relay/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:47591".to_string(),
+                        description: "service=/tycho_map_relay/get_loggers, api=rosrpc://LOCLAP858:47591".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/central_router/get_loggers".to_string(),
+                        service_api: "rosrpc://LOCLAP858:48125".to_string(),
+                        description: "service=/central_router/get_loggers, api=rosrpc://LOCLAP858:48125".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/central_router/set_logger_level".to_string(),
+                        service_api: "rosrpc://LOCLAP858:48125".to_string(),
+                        description: "service=/central_router/set_logger_level, api=rosrpc://LOCLAP858:48125".to_string(),
+                        ..Self::default()
+                    },
+                    Self {
+                        service: "/diagnostics_agg/add_diagnostics".to_string(),
+                        service_api: "rosrpc://LOCLAP858:44013".to_string(),
+                        description: "service=/diagnostics_agg/add_diagnostics, api=rosrpc://LOCLAP858:44013".to_string(),
                         ..Self::default()
                     },
                 ]
             }
             Endpoint::LookupNode | Endpoint::GetPid => vec![
+                // Real node names from the log
                 Self {
-                    node_name: "/test_node1".to_string(),
-                    description: "node_name=/test_node1".to_string(),
+                    node_name: "/roslaunch".to_string(),
+                    description: "node_name=/roslaunch".to_string(),
                     ..Self::default()
                 },
                 Self {
-                    node_name: "/test_node2".to_string(),
-                    description: "node_name=/test_node2".to_string(),
+                    node_name: "/rosout".to_string(),
+                    description: "node_name=/rosout".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/ln_rst_test_node".to_string(),
+                    description: "node_name=/ln_rst_test_node".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/robot_lister".to_string(),
+                    description: "node_name=/robot_lister".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/global_state_aggregator".to_string(),
+                    description: "node_name=/global_state_aggregator".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/executive_server_service_relay".to_string(),
+                    description: "node_name=/executive_server_service_relay".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/tycho_bridge_current_site_config_relay".to_string(),
+                    description: "node_name=/tycho_bridge_current_site_config_relay".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/tycho_map_relay".to_string(),
+                    description: "node_name=/tycho_map_relay".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/central_router".to_string(),
+                    description: "node_name=/central_router".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/diag_agg_wrangler".to_string(),
+                    description: "node_name=/diag_agg_wrangler".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/global_states_throttle".to_string(),
+                    description: "node_name=/global_states_throttle".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/record".to_string(),
+                    description: "node_name=/record".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/nearby_bump_bagger".to_string(),
+                    description: "node_name=/nearby_bump_bagger".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    node_name: "/adjutare_rosbridge_websocket_0".to_string(),
+                    description: "node_name=/adjutare_rosbridge_websocket_0".to_string(),
+                    ..Self::default()
+                },
+                // Test non-existent nodes
+                Self {
+                    node_name: "/non_existent_node".to_string(),
+                    description: "node_name=/non_existent_node (should fail)".to_string(),
                     ..Self::default()
                 },
             ],
-            _ => vec![Self::default()],
+            Endpoint::GetSystemState => vec![
+                // Test with real caller IDs from the log
+                Self {
+                    caller_id: "/roslaunch".to_string(),
+                    description: "caller_id=/roslaunch".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/rosout".to_string(),
+                    description: "caller_id=/rosout".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/ln_rst_test_node".to_string(),
+                    description: "caller_id=/ln_rst_test_node".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/robot_lister".to_string(),
+                    description: "caller_id=/robot_lister".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/global_state_aggregator".to_string(),
+                    description: "caller_id=/global_state_aggregator".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/executive_server_service_relay".to_string(),
+                    description: "caller_id=/executive_server_service_relay".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/central_router".to_string(),
+                    description: "caller_id=/central_router".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/diag_agg_wrangler".to_string(),
+                    description: "caller_id=/diag_agg_wrangler".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/record".to_string(),
+                    description: "caller_id=/record".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/nearby_bump_bagger".to_string(),
+                    description: "caller_id=/nearby_bump_bagger".to_string(),
+                    ..Self::default()
+                },
+            ],
+            Endpoint::GetUri => vec![
+                // Test with real caller IDs from the log
+                Self {
+                    caller_id: "/roslaunch".to_string(),
+                    description: "caller_id=/roslaunch".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/rosout".to_string(),
+                    description: "caller_id=/rosout".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/ln_rst_test_node".to_string(),
+                    description: "caller_id=/ln_rst_test_node".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/robot_lister".to_string(),
+                    description: "caller_id=/robot_lister".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/global_state_aggregator".to_string(),
+                    description: "caller_id=/global_state_aggregator".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/executive_server_service_relay".to_string(),
+                    description: "caller_id=/executive_server_service_relay".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/central_router".to_string(),
+                    description: "caller_id=/central_router".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/diag_agg_wrangler".to_string(),
+                    description: "caller_id=/diag_agg_wrangler".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/record".to_string(),
+                    description: "caller_id=/record".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/nearby_bump_bagger".to_string(),
+                    description: "caller_id=/nearby_bump_bagger".to_string(),
+                    ..Self::default()
+                },
+            ],
+            Endpoint::GetParamNames => vec![
+                // Test with real caller IDs from the log
+                Self {
+                    caller_id: "/roslaunch".to_string(),
+                    description: "caller_id=/roslaunch".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/rosout".to_string(),
+                    description: "caller_id=/rosout".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/ln_rst_test_node".to_string(),
+                    description: "caller_id=/ln_rst_test_node".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/robot_lister".to_string(),
+                    description: "caller_id=/robot_lister".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/global_state_aggregator".to_string(),
+                    description: "caller_id=/global_state_aggregator".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/executive_server_service_relay".to_string(),
+                    description: "caller_id=/executive_server_service_relay".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/central_router".to_string(),
+                    description: "caller_id=/central_router".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/diag_agg_wrangler".to_string(),
+                    description: "caller_id=/diag_agg_wrangler".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/record".to_string(),
+                    description: "caller_id=/record".to_string(),
+                    ..Self::default()
+                },
+                Self {
+                    caller_id: "/nearby_bump_bagger".to_string(),
+                    description: "caller_id=/nearby_bump_bagger".to_string(),
+                    ..Self::default()
+                },
+            ],
         }
     }
 }
@@ -241,9 +857,9 @@ impl TestData {
 impl Default for TestData {
     fn default() -> Self {
         Self {
-            caller_id: "/comparison_node".to_string(),
+            caller_id: "/ros_master_comparison".to_string(),
             service: "/test_service".to_string(),
-            service_api: "http://localhost:12345".to_string(),
+            service_api: "rosrpc://localhost:12345".to_string(),
             caller_api: "http://localhost:12346".to_string(),
             topic: "/test_topic".to_string(),
             topic_type: "std_msgs/String".to_string(),

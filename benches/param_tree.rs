@@ -59,33 +59,31 @@ fn benchmark_contains(c: &mut Criterion) {
 
     group.bench_function("simple_tree_existing", |b| {
         b.iter(|| {
-            black_box(simple_tree.contains(black_box("run_id".to_string())));
+            black_box(simple_tree.contains(black_box("run_id")));
         })
     });
 
     group.bench_function("simple_tree_missing", |b| {
         b.iter(|| {
-            black_box(simple_tree.contains(black_box("missing_key".to_string())));
+            black_box(simple_tree.contains(black_box("missing_key")));
         })
     });
 
     group.bench_function("complex_tree_shallow", |b| {
         b.iter(|| {
-            black_box(complex_tree.contains(black_box("robot_id".to_string())));
+            black_box(complex_tree.contains(black_box("robot_id")));
         })
     });
 
     group.bench_function("complex_tree_deep", |b| {
         b.iter(|| {
-            black_box(
-                complex_tree.contains(black_box("arms/arm_left/joints/shoulder".to_string())),
-            );
+            black_box(complex_tree.contains(black_box("arms/arm_left/joints/shoulder")));
         })
     });
 
     group.bench_function("complex_tree_missing", |b| {
         b.iter(|| {
-            black_box(complex_tree.contains(black_box("arms/arm_left/joints/missing".to_string())));
+            black_box(complex_tree.contains(black_box("arms/arm_left/joints/missing")));
         })
     });
 
@@ -320,13 +318,13 @@ fn benchmark_try_to_value(c: &mut Criterion) {
 
     group.bench_function("simple_tree", |b| {
         b.iter(|| {
-            black_box(simple_tree.try_to_value());
+            black_box(simple_tree.try_to_value().unwrap());
         })
     });
 
     group.bench_function("complex_tree", |b| {
         b.iter(|| {
-            black_box(complex_tree.try_to_value());
+            black_box(complex_tree.try_to_value().unwrap());
         })
     });
 
@@ -352,8 +350,8 @@ fn benchmark_tree_operations_combined(c: &mut Criterion) {
             );
 
             // Check if values exist
-            let _has_robot = tree.contains("robot_id".to_string());
-            let _has_arm = tree.contains("arms/arm_left/length".to_string());
+            let _has_robot = tree.contains("robot_id");
+            let _has_arm = tree.contains("arms/arm_left/length");
 
             black_box(tree);
         })

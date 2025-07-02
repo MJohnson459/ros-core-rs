@@ -18,6 +18,8 @@
 //!
 pub mod client_api;
 pub mod core;
+mod utils;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use url::Url;
 

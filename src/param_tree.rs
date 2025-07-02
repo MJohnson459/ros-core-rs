@@ -1,6 +1,10 @@
 use std::{collections::HashMap, fmt::Display, mem};
 
 use dxr::{TryFromValue, TryToValue, Value};
+use maplit::hashmap;
+use tokio::{sync::RwLock, task::JoinSet};
+
+use crate::client_api::ClientApi;
 
 #[derive(Debug)]
 pub struct ParamTree {
@@ -78,21 +82,26 @@ impl ParamTree {
         params.get(key_path)
     }
 
-    pub async fn set(&self, key: &str, value: ParamValue, caller_id: String) {
+    pub async fn set(&self, key: &str, value: ParamValue, caller_id: String) -> Result<(), String> {
+        // Handle special case of setting the root to a hashmap
         if key == "/" {
             if matches!(value, ParamValue::HashMap(_)) {
                 let mut params = self.params.write().await;
                 let _ = mem::replace(&mut *params, value);
+                return Ok(());
             } else {
-                error!("tried to set root to non-hashmap");
+                return Err(
+                    "invalid arguments: cannot set root of parameter tree to non-dictionary"
+                        .to_string(),
+                );
             }
-            return;
         }
 
         let key_path = key.strip_prefix('/').unwrap_or(&key).split('/');
         let mut params = self.params.write().await;
         params.update_inner(key_path, value);
         self.update_subscribers(key, caller_id).await;
+        return Ok(());
     }
 
     pub async fn delete(&self, key: &str, caller_id: String) {
@@ -371,6 +380,7 @@ async fn update_client_with_new_param_value(
 ) -> Result<Value, anyhow::Error> {
     let client_api = ClientApi::new(&client_api_url);
     let param_value = new_value.try_to_value().unwrap();
+    log::info!("paramUpdate[{}]", param_name);
     let request = client_api.param_update(&updating_node_id, &param_name, &param_value);
     let res = request.await;
     match res {
@@ -390,12 +400,6 @@ async fn update_client_with_new_param_value(
 
     Ok(res?)
 }
-
-use log::error;
-use maplit::hashmap;
-use tokio::{sync::RwLock, task::JoinSet};
-
-use crate::client_api::ClientApi;
 
 #[cfg(test)]
 mod tests {
@@ -423,9 +427,9 @@ mod tests {
         let res: Value = tree.get(["robot_configs"]).unwrap().try_to_value().unwrap();
         assert_eq!(res, Value::i4(23));
 
-        assert!(tree.contains("/".to_owned()));
-        assert!(tree.contains("/arms".to_owned()));
-        assert!(tree.contains("/arms/arm_left".to_owned()));
+        assert!(tree.contains("/"));
+        assert!(tree.contains("/arms"));
+        assert!(tree.contains("/arms/arm_left"));
     }
 
     #[tokio::test]
@@ -444,12 +448,9 @@ mod tests {
         let tree = ParamTree::new(run_id.clone());
 
         let param_value = ParamValue::Value(Value::string("param_value".to_owned()));
-        tree.set(
-            "some/param".to_owned(),
-            param_value.clone(),
-            "caller_id".to_owned(),
-        )
-        .await;
+        tree.set("some/param", param_value.clone(), "caller_id".to_owned())
+            .await
+            .unwrap();
 
         // relative path or absolute path should work
         assert_eq!(tree.get("some/param").await, Some(param_value.clone()));
@@ -466,12 +467,9 @@ mod tests {
             ParamValue::Value(Value::string("param_value2".to_owned())),
         ]);
 
-        tree.set(
-            "some/param".to_owned(),
-            param_value.clone(),
-            "caller_id".to_owned(),
-        )
-        .await;
+        tree.set("some/param", param_value.clone(), "caller_id".to_owned())
+            .await
+            .unwrap();
 
         // relative path or absolute path should work
         assert_eq!(tree.get("some/param").await, Some(param_value.clone()));
@@ -489,12 +487,9 @@ mod tests {
             }),
         });
 
-        tree.set(
-            "some/param".to_owned(),
-            param_value.clone(),
-            "caller_id".to_owned(),
-        )
-        .await;
+        tree.set("some/param", param_value.clone(), "caller_id".to_owned())
+            .await
+            .unwrap();
 
         println!("{}", tree);
 
@@ -523,8 +518,9 @@ mod tests {
             }),
         });
 
-        tree.set("/".to_owned(), param_tree.clone(), "caller_id".to_owned())
-            .await;
+        tree.set("/", param_tree.clone(), "caller_id".to_owned())
+            .await
+            .unwrap();
 
         println!("{}", tree);
 
@@ -586,8 +582,9 @@ mod tests {
         let tree = ParamTree::new(ParamValue::HashMap(hashmap! {
             "run_id".to_owned() => ParamValue::Value(Value::string("asdf-jkl0".to_owned())),
         }));
-        tree.set("/".to_owned(), create_complex_tree(), "test".to_owned())
-            .await;
+        tree.set("/", create_complex_tree(), "test".to_owned())
+            .await
+            .unwrap();
 
         tree
     }
