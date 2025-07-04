@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display};
 
@@ -7,21 +8,45 @@ use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct ParamTree {
-    db: sled::Db,
+    params: DashMap<String, InternalValue>,
     param_subscriptions: RwLock<Vec<ParamSubscription>>,
 }
 
 impl Display for ParamTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "ParamTree:")?;
-        let mut iter = self.db.iter();
-        while let Some(Ok((key, value))) = iter.next() {
-            let key = String::from_utf8(key.to_vec()).unwrap();
-            let value: InternalValue = bincode::deserialize(&value).unwrap();
-            writeln!(f, "{}: {:?}", key, value)?;
+        for item in self.params.iter() {
+            let key = item.key();
+            let value = item.value();
+            display_internal_value(value, key, f)?;
         }
         Ok(())
     }
+}
+
+fn display_internal_value(
+    value: &InternalValue,
+    prefix: &str,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    match value {
+        InternalValue::Integer(i) => writeln!(f, "{prefix}: {}", i)?,
+        InternalValue::Boolean(b) => writeln!(f, "{prefix}: {}", b)?,
+        InternalValue::String(s) => writeln!(f, "{prefix}: \"{}\"", s)?,
+        InternalValue::Double(d) => writeln!(f, "{prefix}: {}", d)?,
+        InternalValue::DateTime(d) => writeln!(f, "{prefix}: {}", d)?,
+        InternalValue::Base64(b) => writeln!(f, "{prefix}: {:?}", b)?,
+        InternalValue::Array(a) => {
+            writeln!(f, "{prefix}: {:?}", a)?;
+        }
+        InternalValue::Structure(hm) => {
+            for (key, value) in hm.iter() {
+                display_internal_value(value, &format!("{prefix}/{key}"), f)?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -33,6 +58,7 @@ enum InternalValue {
     DateTime(NaiveDateTime),
     Base64(Vec<u8>),
     Array(Vec<InternalValue>),
+    Structure(HashMap<String, InternalValue>),
 }
 
 impl TryFromValue for InternalValue {
@@ -51,11 +77,8 @@ impl TryFromValue for InternalValue {
             InternalValue::Base64(b)
         } else if let Ok(a) = Vec::<InternalValue>::try_from_value(&value) {
             InternalValue::Array(a)
-        } else if let Ok(_hm) = HashMap::<String, InternalValue>::try_from_value(&value) {
-            return Err(dxr::DxrError::invalid_data(format!(
-                "HashMaps are not supported: {:?}",
-                value
-            )));
+        } else if let Ok(hm) = HashMap::<String, InternalValue>::try_from_value(&value) {
+            InternalValue::Structure(hm)
         } else {
             log::error!("{:?}", value);
             return Err(dxr::DxrError::invalid_data(format!(
@@ -83,6 +106,12 @@ impl TryToValue for InternalValue {
                 .collect::<Vec<_>>()
                 .try_to_value()
                 .unwrap()),
+            InternalValue::Structure(hm) => Ok(hm
+                .iter()
+                .map(|(k, v)| (k.clone(), v.try_to_value().unwrap()))
+                .collect::<HashMap<_, _>>()
+                .try_to_value()
+                .unwrap()),
         }
     }
 }
@@ -92,18 +121,36 @@ impl TryToValue for InternalValue {
 // }
 
 impl ParamTree {
-    pub fn new(db_path: &str) -> Self {
+    pub fn new() -> Self {
         Self {
-            db: sled::open(db_path).unwrap(),
+            params: DashMap::new(),
             param_subscriptions: RwLock::new(Vec::new()),
         }
     }
 
     pub fn get_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
-        let mut iter = self.db.iter();
-        while let Some(Ok((key, _))) = iter.next() {
-            keys.push("/".to_owned() + &String::from_utf8(key.to_vec()).unwrap());
+
+        for item in self.params.iter() {
+            let prefix = format!("/{}", item.key());
+
+            keys.extend(self.get_keys_internal(&prefix, &item.value()));
+        }
+        keys
+    }
+
+    fn get_keys_internal(&self, prefix: &str, value: &InternalValue) -> Vec<String> {
+        let mut keys = Vec::new();
+        match value {
+            InternalValue::Structure(hm) => {
+                for (key, value) in hm.iter() {
+                    let new_prefix = format!("{prefix}/{key}");
+                    keys.extend(self.get_keys_internal(&new_prefix, value));
+                }
+            }
+            _ => {
+                keys.push(prefix.to_owned());
+            }
         }
         keys
     }
@@ -111,10 +158,43 @@ impl ParamTree {
     pub fn contains(&self, key: &str) -> Result<bool, String> {
         let key = key.trim_start_matches('/');
         if key == "" {
-            return Ok(!self.db.is_empty());
+            return Ok(!self.params.is_empty());
         }
 
-        Ok(self.db.scan_prefix(key).count() > 0)
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            if let Some(value) = self.params.get(&key_prefix) {
+                return Ok(self.contains_internal(&key_rest, &value));
+            }
+        } else {
+            return Ok(self.params.contains_key(key));
+        }
+
+        Ok(false)
+    }
+
+    fn contains_internal(&self, key: &str, value: &InternalValue) -> bool {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            match value {
+                InternalValue::Structure(hm) => {
+                    if let Some(value) = hm.get(&key_prefix) {
+                        return self.contains_internal(&key_rest, &value);
+                    } else {
+                        return false;
+                    }
+                }
+                _ => {
+                    return false;
+                }
+            }
+        } else {
+            return true;
+        }
     }
 
     pub fn set(&self, key: &str, value: Value) -> Result<(), String> {
@@ -125,35 +205,91 @@ impl ParamTree {
         // 4. Update the subscribers (ignore for now)
         let key = key.trim_start_matches('/');
 
-        // Remove all existing values that have a prefix of the key
-        let mut iter = self.db.scan_prefix(key);
-        while let Some(Ok((db_key, _))) = iter.next() {
-            self.db.remove(db_key).map_err(|e| e.to_string())?;
+        if key == "" {
+            // root node so reset entire tree
+            self.params.clear();
+
+            if let Ok(value) = HashMap::<String, Value>::try_from_value(&value) {
+                for (key, value) in value.into_iter() {
+                    self.set(&key, value)?;
+                }
+            } else {
+                return Err(format!("Root node must be a hashmap: {:?}", value));
+            }
+
+            return Ok(());
         }
 
-        // Insert the new value
-        self.insert_value(key, value)?;
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            if let Some(mut existing_value) = self.params.get_mut(&key_prefix) {
+                self.insert_value(&key_rest, &mut existing_value, value)?;
+            } else {
+                let mut new_hm = InternalValue::Structure(HashMap::new());
+                self.insert_value(&key_rest, &mut new_hm, value)?;
+                self.params.insert(key_prefix, new_hm);
+            }
+        } else {
+            self.params.insert(
+                key.to_string(),
+                InternalValue::try_from_value(&value).unwrap(),
+            );
+        }
+
         Ok(())
     }
 
     /// Recursively insert a value into the database.
     /// If the value is a HashMap, we will insert each leaf node into the database.
     /// If the value is not a HashMap, we will insert the value into the database.
-    fn insert_value(&self, key: &str, value: Value) -> Result<(), String> {
-        if let Ok(value_struct) = HashMap::<String, Value>::try_from_value(&value) {
-            for (inside_key, value) in value_struct {
-                let new_key = format!("{}/{}", key, inside_key);
-                // Need to ensure we don't accidentally start with a /
-                let new_key = new_key.trim_start_matches('/');
-                self.insert_value(&new_key, value)?;
+    fn insert_value(
+        &self,
+        key: &str,
+        existing_value: &mut InternalValue,
+        value_to_insert: Value,
+    ) -> Result<(), String> {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            // Check if existing value is a HashMap
+            match existing_value {
+                InternalValue::Structure(hm) => {
+                    if let Some(mut internal_value) = hm.get_mut(&key_prefix) {
+                        self.insert_value(&key_rest, &mut internal_value, value_to_insert)?;
+                    } else {
+                        let mut new_hm = InternalValue::Structure(HashMap::new());
+                        self.insert_value(&key_rest, &mut new_hm, value_to_insert)?;
+                        hm.insert(key_prefix, new_hm);
+                    }
+                }
+                _ => {
+                    let mut new_hm = InternalValue::Structure(HashMap::new());
+                    self.insert_value(&key_rest, &mut new_hm, value_to_insert)?;
+                    *existing_value = new_hm;
+                }
             }
-            return Ok(());
+        } else {
+            match existing_value {
+                InternalValue::Structure(hm) => {
+                    hm.insert(
+                        key.to_string(),
+                        InternalValue::try_from_value(&value_to_insert).unwrap(),
+                    );
+                }
+                _ => {
+                    let mut new_hm = HashMap::new();
+                    new_hm.insert(
+                        key.to_string(),
+                        InternalValue::try_from_value(&value_to_insert).unwrap(),
+                    );
+                    *existing_value = InternalValue::Structure(new_hm);
+                }
+            }
         }
 
-        let internal_value = InternalValue::try_from_value(&value).map_err(|e| e.to_string())?;
-        let vec = bincode::serialize(&internal_value).map_err(|e| e.to_string())?;
-
-        self.db.insert(key, vec).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -163,44 +299,114 @@ impl ParamTree {
         // 3. We will need to convert those into a single Value
         let key = key.trim_start_matches('/');
 
-        if !self.contains(key)? {
-            return Ok(None);
+        if key == "" {
+            // root node so return entire tree as a hashmap
+            let mut hm = HashMap::new();
+            for item in self.params.iter() {
+                hm.insert(item.key().clone(), item.value().try_to_value().unwrap());
+            }
+            return Ok(Some(hm.try_to_value().map_err(|e| e.to_string())?));
         }
 
-        if let Ok(Some(value)) = self.db.get(key) {
-            let value: InternalValue = bincode::deserialize(&value).map_err(|e| e.to_string())?;
+        if let Some(value) = self.params.get(key) {
             return Ok(Some(value.try_to_value().map_err(|e| e.to_string())?));
         }
 
-        // Multiple values so we will need to create a hashmap
-        let mut iter = self.db.scan_prefix(key);
-        let mut hm = HashMap::new();
-        while let Some(Ok((db_key, value))) = iter.next() {
-            let value: InternalValue = bincode::deserialize(&value).map_err(|e| e.to_string())?;
-            let key_bytes = db_key.subslice(key.len(), db_key.len() - key.len());
-            let key = String::from_utf8(key_bytes.to_vec()).map_err(|e| e.to_string())?;
-            let key = key.trim_start_matches('/');
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
 
-            insert_value(
-                &key,
-                value.try_to_value().map_err(|e| e.to_string())?,
-                &mut hm,
-            )?;
+            if let Some(value) = self.params.get(&key_prefix) {
+                return self.get_internal(&key_rest, &value);
+            }
         }
 
-        Ok(Some(hm.try_to_value().map_err(|e| e.to_string())?))
+        return Ok(None);
+    }
+
+    fn get_internal(&self, key: &str, value: &InternalValue) -> Result<Option<Value>, String> {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            match value {
+                InternalValue::Structure(hm) => {
+                    if let Some(value) = hm.get(&key_prefix) {
+                        return self.get_internal(&key_rest, &value);
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                _ => {
+                    return Ok(None);
+                }
+            }
+        } else {
+            match value {
+                InternalValue::Structure(hm) => {
+                    return Ok(Some(
+                        hm.get(key)
+                            .unwrap()
+                            .try_to_value()
+                            .map_err(|e| e.to_string())?,
+                    ));
+                }
+                _ => {
+                    return Ok(None);
+                }
+            }
+        }
     }
 
     pub async fn delete(&self, key: &str) {
         // 1. We will need to delete all entries that have a prefix of the key
         let key = key.trim_start_matches('/');
 
-        let mut iter = self.db.scan_prefix(key);
-        while let Some(Ok((key, _))) = iter.next() {
-            self.db.remove(key).unwrap();
+        if let Some(_value) = self.params.get(key) {
+            self.params.remove(key);
+            return;
+        }
+
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            if let Some(mut value) = self.params.get_mut(&key_prefix) {
+                self.delete_internal(&key_rest, &mut value);
+            }
         }
 
         // self.update_subscribers(key, caller_id).await;
+    }
+
+    fn delete_internal(&self, key: &str, value: &mut InternalValue) -> Result<(), String> {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            match value {
+                InternalValue::Structure(hm) => {
+                    if let Some(mut internal_value) = hm.get_mut(&key_prefix) {
+                        return self.delete_internal(&key_rest, &mut internal_value);
+                    } else {
+                        return Ok(());
+                    }
+                }
+                _ => {
+                    return Ok(());
+                }
+            }
+        } else {
+            match value {
+                InternalValue::Structure(hm) => {
+                    hm.remove(key);
+                    return Ok(());
+                }
+                _ => {
+                    return Ok(());
+                }
+            }
+        }
     }
 
     pub async fn subscribe(
@@ -416,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_param_value() {
-        let tree = ParamTree::new("test_param_value.db");
+        let tree = ParamTree::new();
         tree.set("run_id", Value::string("asdf-jkl0".to_owned()))
             .unwrap();
         tree.set("robot_configs", Value::i4(23)).unwrap();
@@ -442,7 +648,7 @@ mod tests {
     #[test]
     fn test_param_tree_simple() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new("test_param_tree_simple.db");
+        let tree = ParamTree::new();
         tree.set("run_id", run_id.clone()).unwrap();
 
         // relative path or absolute path should work
@@ -453,11 +659,13 @@ mod tests {
     #[test]
     fn test_param_tree_set_get() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new("test_param_tree_set_get.db");
+        let tree = ParamTree::new();
         tree.set("run_id", run_id.clone()).unwrap();
 
         let param_value = Value::string("param_value".to_owned());
         tree.set("some/param", param_value.clone()).unwrap();
+
+        println!("{}", tree);
 
         // relative path or absolute path should work
         assert_eq!(tree.get("some/param").unwrap(), Some(param_value.clone()));
@@ -467,7 +675,7 @@ mod tests {
     #[test]
     fn test_param_tree_set_get_array() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new("test_param_tree_set_get_array.db");
+        let tree = ParamTree::new();
         tree.set("run_id", run_id.clone()).unwrap();
 
         let param_value = vec![
@@ -486,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_param_tree_set_get_hashmap() {
-        let tree = ParamTree::new("test_param_tree_set_get_hashmap.db");
+        let tree = ParamTree::new();
 
         let param_value = HashMap::from([(
             "param_key".to_owned(),
@@ -519,7 +727,7 @@ mod tests {
     #[test]
     fn test_param_tree_set_get_hashmap_root() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new("test_param_tree_set_get_hashmap_root.db");
+        let tree = ParamTree::new();
         tree.set("run_id", run_id.clone()).unwrap();
 
         let param_tree = HashMap::from([(
@@ -644,7 +852,7 @@ mod tests {
     }
 
     fn load_state() -> ParamTree {
-        let tree = ParamTree::new("test_param_tree_get_keys.db");
+        let tree = ParamTree::new();
         tree.set("run_id", Value::string("asdf-jkl0".to_owned()))
             .unwrap();
         tree.set("/", create_complex_value()).unwrap();

@@ -5,8 +5,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-fn create_test_tree(db_path: &str) -> Arc<ParamTree> {
-    let tree = Arc::new(ParamTree::new(db_path));
+fn create_test_tree() -> Arc<ParamTree> {
+    let tree = Arc::new(ParamTree::new());
 
     // Initialize with some test data
     let runtime = Runtime::new().unwrap();
@@ -36,9 +36,9 @@ fn create_test_tree(db_path: &str) -> Arc<ParamTree> {
 fn benchmark_concurrent_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_reads");
     let runtime = Runtime::new().unwrap();
-    let tree = create_test_tree("bench_concurrent_reads.db");
 
     group.bench_function("single_reader", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 black_box(tree.get("robot_id").unwrap());
@@ -49,6 +49,7 @@ fn benchmark_concurrent_reads(c: &mut Criterion) {
     });
 
     group.bench_function("multiple_readers_sequential", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 for _ in 0..10 {
@@ -61,6 +62,7 @@ fn benchmark_concurrent_reads(c: &mut Criterion) {
     });
 
     group.bench_function("multiple_readers_concurrent", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 let handles: Vec<_> = (0..10)
@@ -87,9 +89,9 @@ fn benchmark_concurrent_reads(c: &mut Criterion) {
 fn benchmark_read_write_contention(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_write_contention");
     let runtime = Runtime::new().unwrap();
-    let tree = create_test_tree("bench_read_write_contention.db");
 
     group.bench_function("read_with_occasional_write", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Spawn multiple readers
@@ -125,6 +127,7 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
     });
 
     group.bench_function("heavy_write_with_reads", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Spawn readers
@@ -169,9 +172,9 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
 fn benchmark_subscription_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("subscription_operations");
     let runtime = Runtime::new().unwrap();
-    let tree = create_test_tree("bench_subscription_operations.db");
 
     group.bench_function("subscribe_unsubscribe", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 for i in 0..10 {
@@ -191,6 +194,7 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
     });
 
     group.bench_function("subscription_with_updates", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Subscribe to parameters
@@ -239,9 +243,9 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
 fn benchmark_mixed_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("mixed_operations");
     let runtime = Runtime::new().unwrap();
-    let tree = create_test_tree("bench_mixed_operations.db");
 
     group.bench_function("realistic_workload", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Subscribe to parameters
@@ -297,9 +301,9 @@ fn benchmark_mixed_operations(c: &mut Criterion) {
 fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
     let mut group = c.benchmark_group("lock_contention");
     let runtime = Runtime::new().unwrap();
-    let tree = create_test_tree("bench_lock_contention.db");
 
     group.bench_function("many_readers_few_writers", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Many readers
@@ -340,6 +344,7 @@ fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
     });
 
     group.bench_function("burst_writes", |b| {
+        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Burst of writes
