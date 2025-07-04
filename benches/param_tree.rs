@@ -5,39 +5,29 @@ use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-fn create_test_tree() -> Arc<ParamTree> {
-    let tree = Arc::new(ParamTree::new());
+fn create_test_tree(db_path: &str) -> Arc<ParamTree> {
+    let tree = Arc::new(ParamTree::new(db_path));
 
     // Initialize with some test data
     let runtime = Runtime::new().unwrap();
     runtime.block_on(async {
-        tree.set("robot_id", Value::i4(42).into(), "test".to_string())
-            .await
+        for i in 0..1000 {
+            for j in 0..5 {
+                for k in 0..3 {
+                    tree.set(&format!("param/{i}/{j}/{k}"), Value::i4(j).into())
+                        .unwrap();
+                }
+            }
+        }
+
+        tree.set("robot_id", Value::i4(42).into()).unwrap();
+        tree.set("robot_speed", Value::double(3.0).into()).unwrap();
+        tree.set("arms/left/length", Value::double(0.5).into())
             .unwrap();
-        tree.set("robot_speed", Value::double(3.0).into(), "test".to_string())
-            .await
+        tree.set("arms/right/length", Value::double(0.5).into())
             .unwrap();
-        tree.set(
-            "arms/left/length",
-            Value::double(0.5).into(),
-            "test".to_string(),
-        )
-        .await
-        .unwrap();
-        tree.set(
-            "arms/right/length",
-            Value::double(0.5).into(),
-            "test".to_string(),
-        )
-        .await
-        .unwrap();
-        tree.set(
-            "sensors/camera/resolution",
-            Value::i4(1920).into(),
-            "test".to_string(),
-        )
-        .await
-        .unwrap();
+        tree.set("sensors/camera/resolution", Value::i4(1920).into())
+            .unwrap();
     });
 
     tree
@@ -46,42 +36,40 @@ fn create_test_tree() -> Arc<ParamTree> {
 fn benchmark_concurrent_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_reads");
     let runtime = Runtime::new().unwrap();
+    let tree = create_test_tree("bench_concurrent_reads.db");
 
     group.bench_function("single_reader", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
-                black_box(tree.get("robot_id").await);
-                black_box(tree.get("arms/left/length").await);
-                black_box(tree.contains("sensors/camera/resolution").await);
+                black_box(tree.get("robot_id").unwrap());
+                black_box(tree.get("arms/left/length").unwrap());
+                black_box(tree.contains("sensors/camera/resolution").unwrap());
             });
         });
     });
 
     group.bench_function("multiple_readers_sequential", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 for _ in 0..10 {
-                    black_box(tree.get("robot_id").await);
-                    black_box(tree.get("arms/left/length").await);
-                    black_box(tree.contains("sensors/camera/resolution").await);
+                    black_box(tree.get("robot_id").unwrap());
+                    black_box(tree.get("arms/left/length").unwrap());
+                    black_box(tree.contains("sensors/camera/resolution").unwrap());
                 }
             });
         });
     });
 
     group.bench_function("multiple_readers_concurrent", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 let handles: Vec<_> = (0..10)
                     .map(|_| {
                         let tree = tree.clone();
                         tokio::spawn(async move {
-                            black_box(tree.get("robot_id").await);
-                            black_box(tree.get("arms/left/length").await);
-                            black_box(tree.contains("sensors/camera/resolution").await);
+                            black_box(tree.get("robot_id").unwrap());
+                            black_box(tree.get("arms/left/length").unwrap());
+                            black_box(tree.contains("sensors/camera/resolution").unwrap());
                         })
                     })
                     .collect();
@@ -99,9 +87,9 @@ fn benchmark_concurrent_reads(c: &mut Criterion) {
 fn benchmark_read_write_contention(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_write_contention");
     let runtime = Runtime::new().unwrap();
+    let tree = create_test_tree("bench_read_write_contention.db");
 
     group.bench_function("read_with_occasional_write", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Spawn multiple readers
@@ -110,8 +98,8 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for _ in 0..20 {
-                                black_box(tree.get("robot_id").await);
-                                black_box(tree.get("arms/left/length").await);
+                                black_box(tree.get("robot_id").unwrap());
+                                black_box(tree.get("arms/left/length").unwrap());
                             }
                         })
                     })
@@ -122,9 +110,7 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
                     let tree = tree.clone();
                     tokio::spawn(async move {
                         for i in 0..5 {
-                            tree.set("robot_id", Value::i4(i).into(), "test".to_string())
-                                .await
-                                .unwrap();
+                            tree.set("robot_id", Value::i4(i).into()).unwrap();
                         }
                     })
                 };
@@ -139,7 +125,6 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
     });
 
     group.bench_function("heavy_write_with_reads", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Spawn readers
@@ -148,7 +133,7 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for _ in 0..10 {
-                                black_box(tree.get("robot_id").await);
+                                black_box(tree.get("robot_id").unwrap());
                             }
                         })
                     })
@@ -160,13 +145,8 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for j in 0..10 {
-                                tree.set(
-                                    &format!("param_{}", i),
-                                    Value::i4(j).into(),
-                                    "test".to_string(),
-                                )
-                                .await
-                                .unwrap();
+                                tree.set(&format!("param_{}", i), Value::i4(j).into())
+                                    .unwrap();
                             }
                         })
                     })
@@ -189,9 +169,9 @@ fn benchmark_read_write_contention(c: &mut Criterion) {
 fn benchmark_subscription_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("subscription_operations");
     let runtime = Runtime::new().unwrap();
+    let tree = create_test_tree("bench_subscription_operations.db");
 
     group.bench_function("subscribe_unsubscribe", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 for i in 0..10 {
@@ -211,7 +191,6 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
     });
 
     group.bench_function("subscription_with_updates", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Subscribe to parameters
@@ -240,13 +219,8 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
                     .map(|i| {
                         let tree = tree.clone();
                         tokio::spawn(async move {
-                            tree.set(
-                                &format!("param_{}", i),
-                                Value::i4(i).into(),
-                                "test".to_string(),
-                            )
-                            .await
-                            .unwrap();
+                            tree.set(&format!("param_{}", i), Value::i4(i).into())
+                                .unwrap();
                         })
                     })
                     .collect();
@@ -265,9 +239,9 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
 fn benchmark_mixed_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("mixed_operations");
     let runtime = Runtime::new().unwrap();
+    let tree = create_test_tree("bench_mixed_operations.db");
 
     group.bench_function("realistic_workload", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Subscribe to parameters
@@ -298,17 +272,12 @@ fn benchmark_mixed_operations(c: &mut Criterion) {
                         tokio::spawn(async move {
                             for j in 0..5 {
                                 // Read operations
-                                black_box(tree.get("robot_id").await);
-                                black_box(tree.contains("arms/left/length").await);
+                                black_box(tree.get("robot_id"));
+                                black_box(tree.contains("arms/left/length"));
 
                                 // Write operations
-                                tree.set(
-                                    &format!("param_{}_{}", i, j),
-                                    Value::i4(j).into(),
-                                    "test".to_string(),
-                                )
-                                .await
-                                .unwrap();
+                                tree.set(&format!("param_{}_{}", i, j), Value::i4(j).into())
+                                    .unwrap();
                             }
                         })
                     })
@@ -328,9 +297,9 @@ fn benchmark_mixed_operations(c: &mut Criterion) {
 fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
     let mut group = c.benchmark_group("lock_contention");
     let runtime = Runtime::new().unwrap();
+    let tree = create_test_tree("bench_lock_contention.db");
 
     group.bench_function("many_readers_few_writers", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Many readers
@@ -339,8 +308,8 @@ fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for _ in 0..5 {
-                                black_box(tree.get("robot_id").await);
-                                black_box(tree.get("arms/left/length").await);
+                                black_box(tree.get("robot_id").unwrap());
+                                black_box(tree.get("arms/left/length").unwrap());
                             }
                         })
                     })
@@ -352,13 +321,8 @@ fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for j in 0..3 {
-                                tree.set(
-                                    &format!("writer_{}_{}", i, j),
-                                    Value::i4(j).into(),
-                                    "test".to_string(),
-                                )
-                                .await
-                                .unwrap();
+                                tree.set(&format!("writer_{}_{}", i, j), Value::i4(j).into())
+                                    .unwrap();
                             }
                         })
                     })
@@ -376,7 +340,6 @@ fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
     });
 
     group.bench_function("burst_writes", |b| {
-        let tree = create_test_tree();
         b.iter(|| {
             runtime.block_on(async {
                 // Burst of writes
@@ -385,13 +348,8 @@ fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for j in 0..5 {
-                                tree.set(
-                                    &format!("burst_{}_{}", i, j),
-                                    Value::i4(j).into(),
-                                    "test".to_string(),
-                                )
-                                .await
-                                .unwrap();
+                                tree.set(&format!("burst_{}_{}", i, j), Value::i4(j).into())
+                                    .unwrap();
                             }
                         })
                     })
@@ -403,7 +361,7 @@ fn benchmark_lock_contention_scenarios(c: &mut Criterion) {
                         let tree = tree.clone();
                         tokio::spawn(async move {
                             for _ in 0..10 {
-                                black_box(tree.get("robot_id").await);
+                                black_box(tree.get("robot_id").unwrap());
                             }
                         })
                     })
