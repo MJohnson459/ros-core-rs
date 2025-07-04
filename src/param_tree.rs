@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct ParamTree {
-    params: DashMap<String, InternalValue>,
+    params: DashMap<String, ParamValue>,
     param_subscriptions: RwLock<Vec<ParamSubscription>>,
 }
 
@@ -25,21 +25,21 @@ impl Display for ParamTree {
 }
 
 fn display_internal_value(
-    value: &InternalValue,
+    value: &ParamValue,
     prefix: &str,
     f: &mut std::fmt::Formatter<'_>,
 ) -> std::fmt::Result {
     match value {
-        InternalValue::Integer(i) => writeln!(f, "{prefix}: {}", i)?,
-        InternalValue::Boolean(b) => writeln!(f, "{prefix}: {}", b)?,
-        InternalValue::String(s) => writeln!(f, "{prefix}: \"{}\"", s)?,
-        InternalValue::Double(d) => writeln!(f, "{prefix}: {}", d)?,
-        InternalValue::DateTime(d) => writeln!(f, "{prefix}: {}", d)?,
-        InternalValue::Base64(b) => writeln!(f, "{prefix}: {:?}", b)?,
-        InternalValue::Array(a) => {
+        ParamValue::Integer(i) => writeln!(f, "{prefix}: {}", i)?,
+        ParamValue::Boolean(b) => writeln!(f, "{prefix}: {}", b)?,
+        ParamValue::String(s) => writeln!(f, "{prefix}: \"{}\"", s)?,
+        ParamValue::Double(d) => writeln!(f, "{prefix}: {}", d)?,
+        ParamValue::DateTime(d) => writeln!(f, "{prefix}: {}", d)?,
+        ParamValue::Base64(b) => writeln!(f, "{prefix}: {:?}", b)?,
+        ParamValue::Array(a) => {
             writeln!(f, "{prefix}: {:?}", a)?;
         }
-        InternalValue::Structure(hm) => {
+        ParamValue::Structure(hm) => {
             for (key, value) in hm.iter() {
                 display_internal_value(value, &format!("{prefix}/{key}"), f)?;
             }
@@ -50,35 +50,35 @@ fn display_internal_value(
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-enum InternalValue {
+enum ParamValue {
     Integer(i32),
     Boolean(bool),
     String(String),
     Double(f64),
     DateTime(NaiveDateTime),
     Base64(Vec<u8>),
-    Array(Vec<InternalValue>),
-    Structure(HashMap<String, InternalValue>),
+    Array(Vec<ParamValue>),
+    Structure(HashMap<String, ParamValue>),
 }
 
-impl TryFromValue for InternalValue {
+impl TryFromValue for ParamValue {
     fn try_from_value(value: &Value) -> Result<Self, dxr::DxrError> {
         let value = if let Ok(i) = i32::try_from_value(&value) {
-            InternalValue::Integer(i)
+            ParamValue::Integer(i)
         } else if let Ok(b) = bool::try_from_value(&value) {
-            InternalValue::Boolean(b)
+            ParamValue::Boolean(b)
         } else if let Ok(s) = String::try_from_value(&value) {
-            InternalValue::String(s)
+            ParamValue::String(s)
         } else if let Ok(d) = f64::try_from_value(&value) {
-            InternalValue::Double(d)
+            ParamValue::Double(d)
         } else if let Ok(d) = NaiveDateTime::try_from_value(&value) {
-            InternalValue::DateTime(d)
+            ParamValue::DateTime(d)
         } else if let Ok(b) = Vec::<u8>::try_from_value(&value) {
-            InternalValue::Base64(b)
-        } else if let Ok(a) = Vec::<InternalValue>::try_from_value(&value) {
-            InternalValue::Array(a)
-        } else if let Ok(hm) = HashMap::<String, InternalValue>::try_from_value(&value) {
-            InternalValue::Structure(hm)
+            ParamValue::Base64(b)
+        } else if let Ok(a) = Vec::<ParamValue>::try_from_value(&value) {
+            ParamValue::Array(a)
+        } else if let Ok(hm) = HashMap::<String, ParamValue>::try_from_value(&value) {
+            ParamValue::Structure(hm)
         } else {
             log::error!("{:?}", value);
             return Err(dxr::DxrError::invalid_data(format!(
@@ -91,22 +91,22 @@ impl TryFromValue for InternalValue {
     }
 }
 
-impl TryToValue for InternalValue {
+impl TryToValue for ParamValue {
     fn try_to_value(&self) -> Result<Value, dxr::DxrError> {
         match self {
-            InternalValue::Integer(i) => Ok(Value::i4(*i)),
-            InternalValue::Boolean(b) => Ok(Value::boolean(*b)),
-            InternalValue::String(s) => Ok(Value::string(s.clone())),
-            InternalValue::Double(d) => Ok(Value::double(*d)),
-            InternalValue::DateTime(d) => Ok(Value::string(d.to_string())),
-            InternalValue::Base64(b) => Ok(Value::base64(b.to_vec())),
-            InternalValue::Array(a) => Ok(a
+            ParamValue::Integer(i) => Ok(Value::i4(*i)),
+            ParamValue::Boolean(b) => Ok(Value::boolean(*b)),
+            ParamValue::String(s) => Ok(Value::string(s.clone())),
+            ParamValue::Double(d) => Ok(Value::double(*d)),
+            ParamValue::DateTime(d) => Ok(Value::string(d.to_string())),
+            ParamValue::Base64(b) => Ok(Value::base64(b.to_vec())),
+            ParamValue::Array(a) => Ok(a
                 .iter()
                 .map(|v| v.try_to_value().unwrap())
                 .collect::<Vec<_>>()
                 .try_to_value()
                 .unwrap()),
-            InternalValue::Structure(hm) => Ok(hm
+            ParamValue::Structure(hm) => Ok(hm
                 .iter()
                 .map(|(k, v)| (k.clone(), v.try_to_value().unwrap()))
                 .collect::<HashMap<_, _>>()
@@ -115,10 +115,6 @@ impl TryToValue for InternalValue {
         }
     }
 }
-
-// impl From<Value> for InternalValue {
-//     fn from(value: Value) -> Self {
-// }
 
 impl ParamTree {
     pub fn new() -> Self {
@@ -134,23 +130,7 @@ impl ParamTree {
         for item in self.params.iter() {
             let prefix = format!("/{}", item.key());
 
-            keys.extend(self.get_keys_internal(&prefix, &item.value()));
-        }
-        keys
-    }
-
-    fn get_keys_internal(&self, prefix: &str, value: &InternalValue) -> Vec<String> {
-        let mut keys = Vec::new();
-        match value {
-            InternalValue::Structure(hm) => {
-                for (key, value) in hm.iter() {
-                    let new_prefix = format!("{prefix}/{key}");
-                    keys.extend(self.get_keys_internal(&new_prefix, value));
-                }
-            }
-            _ => {
-                keys.push(prefix.to_owned());
-            }
+            keys.extend(item.value().get_keys(&prefix));
         }
         keys
     }
@@ -166,35 +146,13 @@ impl ParamTree {
             let key_rest = key_rest.to_string();
 
             if let Some(value) = self.params.get(&key_prefix) {
-                return Ok(self.contains_internal(&key_rest, &value));
+                return Ok(value.contains(&key_rest));
             }
         } else {
             return Ok(self.params.contains_key(key));
         }
 
         Ok(false)
-    }
-
-    fn contains_internal(&self, key: &str, value: &InternalValue) -> bool {
-        if let Some((key_prefix, key_rest)) = key.split_once('/') {
-            let key_prefix = key_prefix.to_string();
-            let key_rest = key_rest.to_string();
-
-            match value {
-                InternalValue::Structure(hm) => {
-                    if let Some(value) = hm.get(&key_prefix) {
-                        return self.contains_internal(&key_rest, &value);
-                    } else {
-                        return false;
-                    }
-                }
-                _ => {
-                    return false;
-                }
-            }
-        } else {
-            return true;
-        }
     }
 
     pub fn set(&self, key: &str, value: Value) -> Result<(), String> {
@@ -225,69 +183,15 @@ impl ParamTree {
             let key_rest = key_rest.to_string();
 
             if let Some(mut existing_value) = self.params.get_mut(&key_prefix) {
-                self.insert_value(&key_rest, &mut existing_value, value)?;
+                existing_value.set(&key_rest, value)?;
             } else {
-                let mut new_hm = InternalValue::Structure(HashMap::new());
-                self.insert_value(&key_rest, &mut new_hm, value)?;
+                let mut new_hm = ParamValue::Structure(HashMap::new());
+                new_hm.set(&key_rest, value)?;
                 self.params.insert(key_prefix, new_hm);
             }
         } else {
-            self.params.insert(
-                key.to_string(),
-                InternalValue::try_from_value(&value).unwrap(),
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Recursively insert a value into the database.
-    /// If the value is a HashMap, we will insert each leaf node into the database.
-    /// If the value is not a HashMap, we will insert the value into the database.
-    fn insert_value(
-        &self,
-        key: &str,
-        existing_value: &mut InternalValue,
-        value_to_insert: Value,
-    ) -> Result<(), String> {
-        if let Some((key_prefix, key_rest)) = key.split_once('/') {
-            let key_prefix = key_prefix.to_string();
-            let key_rest = key_rest.to_string();
-
-            // Check if existing value is a HashMap
-            match existing_value {
-                InternalValue::Structure(hm) => {
-                    if let Some(mut internal_value) = hm.get_mut(&key_prefix) {
-                        self.insert_value(&key_rest, &mut internal_value, value_to_insert)?;
-                    } else {
-                        let mut new_hm = InternalValue::Structure(HashMap::new());
-                        self.insert_value(&key_rest, &mut new_hm, value_to_insert)?;
-                        hm.insert(key_prefix, new_hm);
-                    }
-                }
-                _ => {
-                    let mut new_hm = InternalValue::Structure(HashMap::new());
-                    self.insert_value(&key_rest, &mut new_hm, value_to_insert)?;
-                    *existing_value = new_hm;
-                }
-            }
-        } else {
-            match existing_value {
-                InternalValue::Structure(hm) => {
-                    hm.insert(
-                        key.to_string(),
-                        InternalValue::try_from_value(&value_to_insert).unwrap(),
-                    );
-                }
-                _ => {
-                    let mut new_hm = HashMap::new();
-                    new_hm.insert(
-                        key.to_string(),
-                        InternalValue::try_from_value(&value_to_insert).unwrap(),
-                    );
-                    *existing_value = InternalValue::Structure(new_hm);
-                }
-            }
+            self.params
+                .insert(key.to_string(), ParamValue::try_from_value(&value).unwrap());
         }
 
         Ok(())
@@ -317,45 +221,11 @@ impl ParamTree {
             let key_rest = key_rest.to_string();
 
             if let Some(value) = self.params.get(&key_prefix) {
-                return self.get_internal(&key_rest, &value);
+                return value.get(&key_rest);
             }
         }
 
         return Ok(None);
-    }
-
-    fn get_internal(&self, key: &str, value: &InternalValue) -> Result<Option<Value>, String> {
-        if let Some((key_prefix, key_rest)) = key.split_once('/') {
-            let key_prefix = key_prefix.to_string();
-            let key_rest = key_rest.to_string();
-
-            match value {
-                InternalValue::Structure(hm) => {
-                    if let Some(value) = hm.get(&key_prefix) {
-                        return self.get_internal(&key_rest, &value);
-                    } else {
-                        return Ok(None);
-                    }
-                }
-                _ => {
-                    return Ok(None);
-                }
-            }
-        } else {
-            match value {
-                InternalValue::Structure(hm) => {
-                    return Ok(Some(
-                        hm.get(key)
-                            .unwrap()
-                            .try_to_value()
-                            .map_err(|e| e.to_string())?,
-                    ));
-                }
-                _ => {
-                    return Ok(None);
-                }
-            }
-        }
     }
 
     pub async fn delete(&self, key: &str) {
@@ -372,41 +242,11 @@ impl ParamTree {
             let key_rest = key_rest.to_string();
 
             if let Some(mut value) = self.params.get_mut(&key_prefix) {
-                self.delete_internal(&key_rest, &mut value);
+                value.delete(&key_rest);
             }
         }
 
         // self.update_subscribers(key, caller_id).await;
-    }
-
-    fn delete_internal(&self, key: &str, value: &mut InternalValue) -> Result<(), String> {
-        if let Some((key_prefix, key_rest)) = key.split_once('/') {
-            let key_prefix = key_prefix.to_string();
-            let key_rest = key_rest.to_string();
-
-            match value {
-                InternalValue::Structure(hm) => {
-                    if let Some(mut internal_value) = hm.get_mut(&key_prefix) {
-                        return self.delete_internal(&key_rest, &mut internal_value);
-                    } else {
-                        return Ok(());
-                    }
-                }
-                _ => {
-                    return Ok(());
-                }
-            }
-        } else {
-            match value {
-                InternalValue::Structure(hm) => {
-                    hm.remove(key);
-                    return Ok(());
-                }
-                _ => {
-                    return Ok(());
-                }
-            }
-        }
     }
 
     pub async fn subscribe(
@@ -510,36 +350,154 @@ impl ParamTree {
     }
 }
 
-/// Given a key `/example/key/value`, we want to create a hashmap with the following structure:
-/// {
-///     "example": {
-///         "key": {
-///             "value": Value
-///         }
-///     }
-/// }
-fn insert_value(key: &str, value: Value, hm: &mut HashMap<String, Value>) -> Result<(), String> {
-    if let Some((key_next, key_rest)) = key.split_once('/') {
-        if key_rest.is_empty() {
-            hm.insert(key_next.to_string(), value);
-            return Ok(());
-        } else if let Some(next_hm) = hm.get_mut(key_next) {
-            let mut hm_from_value =
-                HashMap::<String, Value>::try_from_value(next_hm).map_err(|e| e.to_string())?;
-            insert_value(key_rest, value, &mut hm_from_value)?;
-            return Ok(());
+impl ParamValue {
+    fn contains(&self, key: &str) -> bool {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            match self {
+                ParamValue::Structure(hm) => {
+                    if let Some(value) = hm.get(&key_prefix) {
+                        return value.contains(&key_rest);
+                    } else {
+                        return false;
+                    }
+                }
+                _ => {
+                    return false;
+                }
+            }
         } else {
-            let mut new_hm = HashMap::new();
-            insert_value(key_rest, value, &mut new_hm)?;
-            hm.insert(
-                key_next.to_string(),
-                new_hm.try_to_value().map_err(|e| e.to_string())?,
-            );
-            return Ok(());
+            return true;
         }
-    } else {
-        hm.insert(key.to_string(), value);
-        return Ok(());
+    }
+
+    fn get_keys(&self, prefix: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        match self {
+            ParamValue::Structure(hm) => {
+                for (key, value) in hm.iter() {
+                    let new_prefix = format!("{prefix}/{key}");
+                    keys.extend(value.get_keys(&new_prefix));
+                }
+            }
+            _ => {
+                keys.push(prefix.to_owned());
+            }
+        }
+        keys
+    }
+
+    /// Recursively insert a value into the database.
+    /// If the value is a HashMap, we will insert each leaf node into the database.
+    /// If the value is not a HashMap, we will insert the value into the database.
+    fn set(&mut self, key: &str, value_to_insert: Value) -> Result<(), String> {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            // Check if existing value is a HashMap
+            match self {
+                ParamValue::Structure(hm) => {
+                    if let Some(internal_value) = hm.get_mut(&key_prefix) {
+                        internal_value.set(&key_rest, value_to_insert)?;
+                    } else {
+                        let mut new_hm = ParamValue::Structure(HashMap::new());
+                        new_hm.set(&key_rest, value_to_insert)?;
+                        hm.insert(key_prefix, new_hm);
+                    }
+                }
+                _ => {
+                    let mut new_hm = ParamValue::Structure(HashMap::new());
+                    new_hm.set(&key_rest, value_to_insert)?;
+                    *self = new_hm;
+                }
+            }
+        } else {
+            match self {
+                ParamValue::Structure(hm) => {
+                    hm.insert(
+                        key.to_string(),
+                        ParamValue::try_from_value(&value_to_insert).unwrap(),
+                    );
+                }
+                _ => {
+                    let mut new_hm = HashMap::new();
+                    new_hm.insert(
+                        key.to_string(),
+                        ParamValue::try_from_value(&value_to_insert).unwrap(),
+                    );
+                    *self = ParamValue::Structure(new_hm);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Value>, String> {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            match self {
+                ParamValue::Structure(hm) => {
+                    if let Some(value) = hm.get(&key_prefix) {
+                        return value.get(&key_rest);
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                _ => {
+                    return Ok(None);
+                }
+            }
+        } else {
+            match self {
+                ParamValue::Structure(hm) => {
+                    return Ok(Some(
+                        hm.get(key)
+                            .unwrap()
+                            .try_to_value()
+                            .map_err(|e| e.to_string())?,
+                    ));
+                }
+                _ => {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    fn delete(&mut self, key: &str) {
+        if let Some((key_prefix, key_rest)) = key.split_once('/') {
+            let key_prefix = key_prefix.to_string();
+            let key_rest = key_rest.to_string();
+
+            match self {
+                ParamValue::Structure(hm) => {
+                    if let Some(internal_value) = hm.get_mut(&key_prefix) {
+                        return internal_value.delete(&key_rest);
+                    } else {
+                        return;
+                    }
+                }
+                _ => {
+                    return;
+                }
+            }
+        } else {
+            match self {
+                ParamValue::Structure(hm) => {
+                    hm.remove(key);
+                    return;
+                }
+                _ => {
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -594,31 +552,6 @@ fn one_is_prefix_of_the_other(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_insert_value() {
-        let mut hm = HashMap::new();
-        insert_value(
-            "example/key/value",
-            Value::string("value".to_owned()),
-            &mut hm,
-        )
-        .unwrap();
-        let hm_value = hm.try_to_value().unwrap();
-
-        assert_eq!(
-            hm_value,
-            HashMap::from([(
-                "example".to_owned(),
-                HashMap::from([(
-                    "key".to_owned(),
-                    HashMap::from([("value".to_owned(), Value::string("value".to_owned()))])
-                )])
-            )])
-            .try_to_value()
-            .unwrap()
-        );
-    }
 
     #[test]
     fn test_param_value() {
