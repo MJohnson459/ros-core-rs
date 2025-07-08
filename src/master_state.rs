@@ -1,7 +1,7 @@
 extern crate dxr;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::collections::HashSet;
+
+use dashmap::{DashMap, Entry};
 
 use crate::client_api::ClientApi;
 
@@ -9,23 +9,22 @@ use crate::client_api::ClientApi;
 #[derive(Default)]
 pub struct MasterState {
     /// A map of service names to the set of nodes that provide that service.
-    service_list: RwLock<HashMap<String, HashMap<String, String>>>,
+    service_list: DashMap<String, DashMap<String, String>>,
     /// A map of node names to the API URL of the node.
-    nodes: RwLock<HashMap<String, String>>,
+    nodes: DashMap<String, String>,
     /// A map of topic names to the type of the topic.
-    topics: RwLock<HashMap<String, String>>,
+    topics: DashMap<String, String>,
     /// A map of topic names to the set of nodes that are subscribed to that topic.
-    subscriptions: RwLock<HashMap<String, HashSet<String>>>,
+    subscriptions: DashMap<String, HashSet<String>>,
     /// A map of topic names to the set of nodes that are publishing to that topic.
-    publications: RwLock<HashMap<String, HashSet<String>>>,
+    publications: DashMap<String, HashSet<String>>,
 }
 
 impl MasterState {
     pub fn register_node(&self, caller_id: &str, caller_api: &str) {
         let shutdown_api_url;
         {
-            let mut nodes = self.nodes.write().unwrap();
-            match nodes.entry(caller_id.to_owned()) {
+            match self.nodes.entry(caller_id.to_owned()) {
                 Entry::Vacant(v) => {
                     v.insert(caller_api.to_owned());
                     return;
@@ -54,8 +53,6 @@ impl MasterState {
         caller_api: &str,
     ) {
         self.service_list
-            .write()
-            .unwrap()
             .entry(service.to_string())
             .or_default()
             .insert(caller_id.to_string(), service_api.to_string());
@@ -65,9 +62,7 @@ impl MasterState {
     pub fn unregister_service(&self, caller_id: &str, service: &str) -> bool {
         let service = resolve(&caller_id, &service);
 
-        let mut service_list = self.service_list.write().unwrap();
-
-        let removed = if let Some(providers) = service_list.get_mut(&service) {
+        let removed = if let Some(providers) = self.service_list.get_mut(&service) {
             providers.remove(caller_id);
             providers.is_empty()
         } else {
@@ -75,7 +70,7 @@ impl MasterState {
         };
 
         if removed {
-            service_list.remove(&service);
+            self.service_list.remove(&service);
         }
 
         removed
@@ -92,38 +87,33 @@ impl MasterState {
     ) -> Vec<String> {
         let topic = resolve(&caller_id, &topic);
 
-        if let Some(known_topic_type) = self.topics.read().unwrap().get(&topic.clone()) {
-            if known_topic_type != &topic_type && topic_type != "*" {
-                log::warn!("Topic '{topic}' was initially published as '{known_topic_type}', but subscriber '{caller_id}' wants it as '{topic_type}'.");
+        if let Some(known_topic_type) = self.topics.get(&topic.clone()) {
+            if known_topic_type.as_str() != topic_type && topic_type != "*" {
+                log::warn!("Topic '{topic}' was initially published as '{known_topic_type:?}', but subscriber '{caller_id}' wants it as '{topic_type}'.");
             }
         }
 
         self.subscriptions
-            .write()
-            .unwrap()
             .entry(topic.clone())
             .or_default()
             .insert(caller_id.to_string());
 
-        println!("subscriptions: {:?}", self.subscriptions.read().unwrap());
+        println!("subscriptions: {:?}", self.subscriptions);
 
         self.register_node(&caller_id, &caller_api);
 
         let publishers = self
             .publications
-            .read()
-            .unwrap()
             .get(&topic)
-            .cloned()
+            .map(|p| p.clone())
             .unwrap_or_default();
-        let nodes = self.nodes.read().unwrap();
 
         println!("publishers: {:?}", publishers);
-        println!("nodes: {:?}", nodes);
+        println!("nodes: {:?}", self.nodes);
 
         let publisher_apis: Vec<String> = publishers
             .iter()
-            .filter_map(|p| nodes.get(p).cloned())
+            .filter_map(|p| self.nodes.get(p).map(|n| n.to_string()))
             .collect();
 
         println!("publisher_apis: {:?}", publisher_apis);
@@ -135,7 +125,7 @@ impl MasterState {
     /// Returns the name of the nodes that is subscribed to the given topic.
     fn lookup_subscriber(&self, caller_id: &str, topic: &str) -> Vec<String> {
         let topic = resolve(&caller_id, &topic);
-        let subscribers = self.subscriptions.read().unwrap().get(&topic).cloned();
+        let subscribers = self.subscriptions.get(&topic).map(|s| s.clone());
 
         match subscribers {
             Some(subscribers) => subscribers.into_iter().collect(),
@@ -148,16 +138,11 @@ impl MasterState {
 
         let removed = self
             .subscriptions
-            .write()
-            .unwrap()
             .entry(topic.clone())
             .or_default()
             .remove(caller_id);
 
-        self.subscriptions
-            .write()
-            .unwrap()
-            .retain(|_, v| !v.is_empty());
+        self.subscriptions.retain(|_, v| !v.is_empty());
 
         removed
     }
@@ -171,9 +156,9 @@ impl MasterState {
     ) -> Vec<String> {
         let topic = resolve(&caller_id, &topic);
 
-        if let Some(v) = self.topics.read().unwrap().get(&topic.clone()) {
-            if v != &topic_type {
-                log::warn!("New publisher for topic '{topic}' has type '{topic_type}', but it is already published as '{v}'.");
+        if let Some(v) = self.topics.get(&topic.clone()) {
+            if v.as_str() != topic_type {
+                log::warn!("New publisher for topic '{topic}' has type '{topic_type}', but it is already published as '{v:?}'.");
             }
         }
 
@@ -182,27 +167,20 @@ impl MasterState {
         // TODO(patwie): Maybe holding the lock for a longer time?
         // let mut publications = self.data.publications.write().unwrap();
         self.publications
-            .write()
-            .unwrap()
             .entry(topic.clone())
             .or_default()
             .insert(caller_id.to_string());
 
         // TODO(mj): If the topic already exists, we should probably error and not overwrite.
-        self.topics
-            .write()
-            .unwrap()
-            .insert(topic.clone(), topic_type.to_string());
+        self.topics.insert(topic.clone(), topic_type.to_string());
 
-        let nodes = self.nodes.read().unwrap();
         let subscribers_api_urls = self
             .subscriptions
-            .read()
-            .unwrap()
             .get(&topic)
-            .unwrap_or(&HashSet::new())
+            .map(|s| s.clone())
+            .unwrap_or_default()
             .iter()
-            .filter_map(|s| nodes.get(s).map(|n| n.to_string()))
+            .filter_map(|s| self.nodes.get(s).map(|n| n.to_string()))
             .collect::<Vec<String>>();
 
         subscribers_api_urls
@@ -212,7 +190,7 @@ impl MasterState {
     /// Returns the name of the node that is publishing the given topic.
     fn lookup_publisher(&self, caller_id: &str, topic: &str) -> Vec<String> {
         let topic = resolve(&caller_id, &topic);
-        let publishers = self.publications.read().unwrap().get(&topic).cloned();
+        let publishers = self.publications.get(&topic).map(|p| p.clone());
 
         match publishers {
             Some(publishers) => publishers.into_iter().collect(),
@@ -229,21 +207,17 @@ impl MasterState {
     ) {
         let publishers = self
             .publications
-            .read()
-            .unwrap()
             .get(topic)
-            .cloned()
+            .map(|p| p.clone())
             .unwrap_or_default();
 
         // Inform all subscribers of the new publisher.
         let publisher_nodes = publishers.into_iter().collect::<Vec<String>>();
         let publisher_apis = self
             .nodes
-            .read() // Note: This should not be a race condition, because for every publisher, the node has to be there first, and we're reading "nodes" after "publishers".
-            .unwrap()
             .iter()
-            .filter(|node| publisher_nodes.contains(node.0))
-            .map(|node| node.1.clone())
+            .filter(|node| publisher_nodes.contains(node.key()))
+            .map(|node| node.value().clone())
             .collect::<Vec<String>>();
 
         for client_api_url in subscribers_api_urls {
@@ -281,32 +255,21 @@ impl MasterState {
     pub fn unregister_publisher(&self, caller_id: &str, topic: &str) -> Result<bool, String> {
         let topic = resolve(&caller_id, &topic);
 
-        if self
-            .publications
-            .write()
-            .unwrap()
-            .get(&topic.clone())
-            .is_none()
-        {
+        if self.publications.get(&topic.clone()).is_none() {
             return Err(format!("[{caller_id}] is not a registered node"));
         }
         let removed = self
             .publications
-            .write()
-            .unwrap()
             .entry(topic.clone())
             .or_default()
             .remove(caller_id);
-        self.publications
-            .write()
-            .unwrap()
-            .retain(|_, v| !v.is_empty());
+        self.publications.retain(|_, v| !v.is_empty());
 
         Ok(removed)
     }
 
     pub fn lookup_node(&self, node_name: &str) -> Option<String> {
-        if let Some(node_api) = self.nodes.read().unwrap().get(node_name) {
+        if let Some(node_api) = self.nodes.get(node_name) {
             return Some(node_api.to_string());
         } else {
             return None;
@@ -315,22 +278,24 @@ impl MasterState {
 
     pub fn get_published_topics(&self, subgraph: &str) -> Vec<(String, String)> {
         let mut result = Vec::<(String, String)>::new();
-        let topics = self.topics.read().unwrap().clone();
-        for topic in self.publications.read().unwrap().keys() {
-            if !topic.starts_with(subgraph) {
+        for topic in self.publications.iter() {
+            if !topic.key().starts_with(subgraph) {
                 continue;
             }
 
-            let data_type = topics.get(&topic.clone());
+            let data_type = self.topics.get(topic.key());
             if let Some(data_type) = data_type {
-                result.push((topic.clone(), data_type.to_owned()));
+                result.push((topic.key().to_string(), data_type.to_string()));
             }
         }
         result
     }
 
     pub fn get_topic_types(&self) -> Vec<(String, String)> {
-        self.topics.read().unwrap().clone().into_iter().collect()
+        self.topics
+            .iter()
+            .map(|t| (t.key().to_string(), t.value().to_string()))
+            .collect()
     }
 
     pub fn get_system_state(
@@ -345,38 +310,36 @@ impl MasterState {
     ) {
         let publishers: Vec<(String, Vec<String>)> = self
             .publications
-            .read()
-            .unwrap()
             .iter()
-            .map(|(k, v)| {
-                let mut node_names: Vec<_> = v.iter().cloned().collect();
+            .map(|item| {
+                let mut node_names: Vec<_> = item.value().iter().cloned().collect();
                 node_names.sort();
 
-                (k.clone(), node_names)
+                (item.key().to_string(), node_names)
             })
             .collect();
         let subscribers: Vec<(String, Vec<String>)> = self
             .subscriptions
-            .read()
-            .unwrap()
             .iter()
-            .map(|(k, v)| {
-                let mut node_names: Vec<_> = v.iter().cloned().collect();
+            .map(|item| {
+                let mut node_names: Vec<_> = item.value().iter().cloned().collect();
                 node_names.sort();
 
-                (k.clone(), node_names)
+                (item.key().to_string(), node_names)
             })
             .collect();
         let services: Vec<(String, Vec<String>)> = self
             .service_list
-            .read()
-            .unwrap()
             .iter()
-            .map(|(k, v)| {
-                let mut node_names: Vec<_> = v.keys().cloned().collect();
+            .map(|item| {
+                let mut node_names: Vec<_> = item
+                    .value()
+                    .iter()
+                    .map(|internal_item| internal_item.key().to_string())
+                    .collect::<Vec<String>>();
                 node_names.sort();
 
-                (k.clone(), node_names)
+                (item.key().to_string(), node_names)
             })
             .collect();
         (publishers, subscribers, services)
@@ -385,9 +348,9 @@ impl MasterState {
     pub fn lookup_service(&self, caller_id: &str, service: &str) -> Result<String, String> {
         let service = resolve(&caller_id, &service);
 
-        let services = self.service_list.read().unwrap().get(&service).cloned();
+        let services = self.service_list.get(&service).map(|s| s.clone());
         if let Some(services) = services {
-            if let Some(service_url) = services.values().next() {
+            if let Some(service_url) = services.iter().next() {
                 return Ok(service_url.clone());
             }
         }
@@ -494,5 +457,25 @@ mod tests {
         assert!(master_state
             .lookup_publisher("node_1", "topic")
             .contains(&"node_1".to_string()),);
+    }
+
+    #[test]
+    fn test_get_published_topics() {
+        let master_state = MasterState::default();
+        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        assert_eq!(
+            master_state.get_published_topics(""),
+            vec![("topic".to_string(), "std_msgs/String".to_string())],
+        );
+    }
+
+    #[test]
+    fn test_get_topic_types() {
+        let master_state = MasterState::default();
+        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        assert_eq!(
+            master_state.get_topic_types(),
+            vec![("topic".to_string(), "std_msgs/String".to_string())],
+        );
     }
 }
