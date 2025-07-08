@@ -13,11 +13,11 @@ categories = ["science::robotics"]
 
 [dependencies]
 dxr = "0.7.1"
-# dxr_server = { version = "0.7.1", features = ["axum", "multicall"] }
-# dxr_client = { version = "0.7.1", default-features = false, features = [
-#     "reqwest",
-#     "rustls-tls", # Use rustls instead of openssl for easier cross-compilation
-# ] }
+dxr_server = { version = "0.7.1", features = ["axum", "multicall"] }
+dxr_client = { version = "0.7.1", default-features = false, features = [
+    "reqwest",
+    "rustls-tls", # Use rustls instead of openssl for easier cross-compilation
+] }
 anyhow = "1.0.98"
 log = "0.4.27"
 env_logger = "0.10.2"

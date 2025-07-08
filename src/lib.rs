@@ -24,7 +24,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use url::Url;
 
 pub mod param_tree;
-pub use param_tree::ParamValue;
 
 pub fn url_to_socket_addr(url: &Url) -> anyhow::Result<SocketAddr> {
     let ip_addr = match url.host() {

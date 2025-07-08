@@ -4,7 +4,6 @@ use paste::paste;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use uuid::Context;
 
 use dxr_server::{async_trait, Handler, HandlerResult};
 use dxr_server::{
@@ -12,9 +11,8 @@ use dxr_server::{
     RouteBuilder, Server,
 };
 
-use dxr::{TryFromParams, TryFromValue, TryToValue, Value};
+use dxr::{DxrError, TryFromParams, TryFromValue, TryToValue, Value};
 
-use crate::param_tree::ParamValue;
 use crate::utils::{format_params, format_value};
 use crate::{client_api::ClientApi, param_tree::ParamTree};
 
@@ -23,7 +21,7 @@ pub type Nodes = HashMap<String, String>;
 pub type Topics = HashMap<String, String>;
 pub type Subscriptions = HashMap<String, HashSet<String>>;
 pub type Publishers = HashMap<String, HashSet<String>>;
-pub type Parameters = crate::param_tree::ParamValue;
+pub type Parameters = Value;
 
 /// An enum that represents the different types of endpoints that can be accessed in the ROS Master API.
 ///
@@ -1044,7 +1042,7 @@ impl Handler for DeleteParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
-        self.data.parameters.delete(&key, caller_id).await;
+        self.data.parameters.delete(&key).await;
 
         let status = format!("parameter {} deleted", &key);
         let result = (1, status, 0);
@@ -1088,11 +1086,7 @@ impl Handler for SetParamHandler {
         let (caller_id, key, value) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
 
-        let status = self
-            .data
-            .parameters
-            .set(&key, ParamValue::Value(value), caller_id.clone())
-            .await;
+        let status = self.data.parameters.set(&key, value);
 
         let return_value = match status {
             Ok(_) => {
@@ -1139,13 +1133,13 @@ impl Handler for GetParamHandler {
         let (caller_id, key) = Request::try_from_params(params)?;
         let key_full = resolve(&caller_id, &key);
 
-        let response = match self.data.parameters.get(&key_full).await {
-            Some(value) => (
+        let response = match self.data.parameters.get(&key_full) {
+            Ok(Some(value)) => (
                 1,
                 format!("Parameter [{}]", &key_full),
                 value.try_to_value().unwrap(),
             ),
-            None => (
+            _ => (
                 -1,
                 format!("Parameter [{}] is not set", &key_full),
                 Value::i4(0),
@@ -1171,7 +1165,7 @@ impl Handler for SearchParamHandler {
 
         // For an explanation of what the search algorithm does, see the comment in the original code:
         // https://github.com/ros/ros_comm/blob/9ae132c/tools/rosmaster/src/rosmaster/paramserver.py#L82
-        let internal_params = self.data.parameters.get_keys().await;
+        let internal_params = self.data.parameters.get_keys();
         let key = key.strip_prefix('/').unwrap_or(&key);
         let key_first_element = key.split('/').next().unwrap_or("");
         let namespace = caller_id
@@ -1244,7 +1238,8 @@ impl Handler for SubscribeParamHandler {
             .data
             .parameters
             .subscribe(caller_id.clone(), key.clone(), caller_api)
-            .await;
+            .map_err(|e| DxrError::invalid_data(e))?
+            .unwrap_or(HashMap::<String, Value>::new().try_to_value()?);
 
         log::info!("+CACHEDPARAM [{}] by {}", key, caller_id);
         let response = (1, &format!("Subscribed to parameter [{}]", &key), value);
@@ -1290,11 +1285,7 @@ impl Handler for UnSubscribeParamHandler {
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
 
-        let removed = self
-            .data
-            .parameters
-            .unsubscribe(caller_api, key.clone())
-            .await;
+        let removed = self.data.parameters.unsubscribe(caller_api, key.clone());
         let status = if removed {
             format!("Unsubscribe to parameter [{}]", key)
         } else {
@@ -1349,7 +1340,11 @@ impl Handler for HasParamHandler {
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
-        let has = self.data.parameters.contains(&key).await;
+        let has = self
+            .data
+            .parameters
+            .contains(&key)
+            .map_err(|e| DxrError::invalid_data(e))?;
         let response = (1, key, has);
         log::debug!("hasParam[{}] returns {:?}", params_str, response);
         Ok(response.try_to_value()?)
@@ -1389,7 +1384,7 @@ impl Handler for GetParamNamesHandler {
             a?;
         }
 
-        let keys: Vec<String> = self.data.parameters.get_keys().await;
+        let keys: Vec<String> = self.data.parameters.get_keys();
         let response = (1, "Parameter names", keys);
         log::debug!("getParamNames[{}] returns {:?}", params_str, response);
         Ok(response.try_to_value()?)

@@ -1,15 +1,15 @@
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display};
+use tokio::task::JoinSet;
 
 use chrono::NaiveDateTime;
 use dxr::{TryFromValue, TryToValue, Value};
-use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct ParamTree {
     params: DashMap<String, ParamValue>,
-    param_subscriptions: RwLock<Vec<ParamSubscription>>,
+    param_subscriptions: DashMap<String, ParamSubscription>,
 }
 
 impl Display for ParamTree {
@@ -120,7 +120,7 @@ impl ParamTree {
     pub fn new() -> Self {
         Self {
             params: DashMap::new(),
-            param_subscriptions: RwLock::new(Vec::new()),
+            param_subscriptions: DashMap::new(),
         }
     }
 
@@ -249,104 +249,85 @@ impl ParamTree {
         // self.update_subscribers(key, caller_id).await;
     }
 
-    pub async fn subscribe(
+    pub fn subscribe(
         &self,
         node_id: String,
         param: String,
         api_uri: String,
     ) -> Result<Option<Value>, String> {
-        {
-            let mut param_subscriptions = self.param_subscriptions.write().await;
-            let mut api_uri = Some(api_uri);
-
-            // replace old entry if subscribing node has restarted
-            for subscription in param_subscriptions.iter_mut() {
-                if &subscription.node_id == &node_id && &subscription.param == &param {
-                    subscription.api_uri = api_uri.take().unwrap();
-                    break;
-                }
+        // replace old entry if subscribing node has restarted
+        if let Some(mut subscription) = self.param_subscriptions.get_mut(&param) {
+            if subscription.node_id == node_id {
+                subscription.api_uri = api_uri;
+                return self.get(&param);
             }
+        }
 
-            // add a new entry if it's a new node id
-            if let Some(api_uri) = api_uri {
-                param_subscriptions.push(ParamSubscription {
-                    node_id,
-                    param: param.clone(),
-                    api_uri,
-                });
-            }
-        } // param_subscriptions lock released here
+        // add a new entry if it's a new node id
+        self.param_subscriptions
+            .insert(param.clone(), ParamSubscription { node_id, api_uri });
 
         self.get(&param)
     }
 
     /// Returns true if the subscription was removed, false if it was not found.
-    pub async fn unsubscribe(&self, caller_api: String, key: String) -> bool {
-        let mut param_subscriptions = self.param_subscriptions.write().await;
-        let mut removed = false;
-        param_subscriptions.retain(|subscription| {
-            if subscription.api_uri == caller_api && subscription.param == key {
-                removed = true;
-                false
-            } else {
-                true
+    pub fn unsubscribe(&self, caller_api: String, key: String) -> bool {
+        for subscription in self.param_subscriptions.iter() {
+            if subscription.value().api_uri == caller_api && subscription.key() == &key {
+                self.param_subscriptions.remove(subscription.key());
+                return true;
             }
-        });
-        removed
+        }
+        false
     }
 
     async fn update_subscribers(&self, key: &str, caller_id: String) {
-        // let mut update_futures = JoinSet::new();
-        // let param_subscriptions = self.param_subscriptions.read().await;
+        let mut update_futures = JoinSet::new();
+        let key = key.trim_start_matches('/');
 
-        // for subscription in param_subscriptions.iter() {
-        //     if one_is_prefix_of_the_other(&key, &subscription.param) {
-        //         let subscribed_key_spit = subscription
-        //             .param
-        //             .strip_prefix('/')
-        //             .unwrap_or(&subscription.param)
-        //             .split('/');
+        for subscription in self.param_subscriptions.iter() {
+            if subscription.key().starts_with(key) {
+                let value = self.get(subscription.key()).unwrap();
+                if let Some(new_value) = value {
+                    update_futures.spawn(update_client_with_new_param_value(
+                        subscription.api_uri.clone(),
+                        caller_id.clone(),
+                        subscription.node_id.clone(),
+                        subscription.key().to_string(),
+                        ParamValue::try_from_value(&new_value).unwrap(),
+                    ));
+                } else {
+                    log::warn!(
+                        "Parameter {} no longer exists, skipping update for subscriber {}",
+                        subscription.key(),
+                        subscription.node_id
+                    );
+                }
+            }
+        }
 
-        //         if let Some(new_value) = self.params.read().await.get(subscribed_key_spit) {
-        //             update_futures.spawn(update_client_with_new_param_value(
-        //                 subscription.api_uri.clone(),
-        //                 caller_id.clone(),
-        //                 subscription.node_id.clone(),
-        //                 subscription.param.clone(),
-        //                 new_value,
-        //             ));
-        //         } else {
-        //             log::warn!(
-        //                 "Parameter {} no longer exists, skipping update for subscriber {}",
-        //                 subscription.param,
-        //                 subscription.node_id
-        //             );
-        //         }
-        //     }
-        // }
-
-        // while let Some(res) = update_futures.join_next().await {
-        //     match res {
-        //         // Ok(Ok(v)) => {
-        //         //     log::debug!("a subscriber has been updated (res: {:#?})", &v);
-        //         // }
-        //         // Ok(Err(err)) => {
-        //         //     log::warn!(
-        //         //         "Error updating a subscriber of changed param {}:\n{:#?}",
-        //         //         &key,
-        //         //         err
-        //         //     );
-        //         // }
-        //         Err(err) => {
-        //             log::warn!(
-        //                 "Error updating a subscriber of changed param {}:\n{:#?}",
-        //                 &key,
-        //                 err
-        //             );
-        //         }
-        //         _ => (),
-        //     }
-        // }
+        while let Some(res) = update_futures.join_next().await {
+            match res {
+                // Ok(Ok(v)) => {
+                //     log::debug!("a subscriber has been updated (res: {:#?})", &v);
+                // }
+                // Ok(Err(err)) => {
+                //     log::warn!(
+                //         "Error updating a subscriber of changed param {}:\n{:#?}",
+                //         &key,
+                //         err
+                //     );
+                // }
+                Err(err) => {
+                    log::warn!(
+                        "Error updating a subscriber of changed param {}:\n{:#?}",
+                        &key,
+                        err
+                    );
+                }
+                _ => (),
+            }
+        }
     }
 }
 
@@ -504,50 +485,44 @@ impl ParamValue {
 #[derive(Debug)]
 pub struct ParamSubscription {
     node_id: String,
-    param: String,
     api_uri: String,
 }
 
-fn one_is_prefix_of_the_other(a: &str, b: &str) -> bool {
-    let len = a.len().min(b.len());
-    a[..len] == b[..len]
+async fn update_client_with_new_param_value(
+    _client_api_url: String,
+    _updating_node_id: String,
+    _subscribing_node_id: String,
+    param_name: String,
+    new_value: ParamValue,
+) -> Result<Value, anyhow::Error> {
+    // let _client_api = ClientApi::new(&client_api_url);
+    let param_value = new_value
+        .try_to_value()
+        .map_err(|e| anyhow::anyhow!("Failed to convert param value: {}", e))?;
+
+    log::info!("paramUpdate[{}]", param_name);
+    // TODO: remove this once we have a way to test the param update
+    return Ok(param_value);
+
+    // let request = client_api.param_update(&updating_node_id, &param_name, &param_value);
+    // let res = request.await;
+    // match res {
+    //     Ok(ref v) => log::debug!(
+    //         "Sent new value for param '{}' to node '{}'. response: {:?}",
+    //         param_name,
+    //         subscribing_node_id,
+    //         &v
+    //     ),
+    //     Err(ref e) => log::debug!(
+    //         "Error sending new value for param '{}' to node '{}': {:?}",
+    //         param_name,
+    //         subscribing_node_id,
+    //         e
+    //     ),
+    // }
+
+    // Ok(res?)
 }
-
-// async fn update_client_with_new_param_value(
-//     client_api_url: String,
-//     _updating_node_id: String,
-//     _subscribing_node_id: String,
-//     param_name: String,
-//     new_value: ParamValue,
-// ) -> Result<Value, anyhow::Error> {
-//     let _client_api = ClientApi::new(&client_api_url);
-//     let param_value = new_value
-//         .try_to_value()
-//         .map_err(|e| anyhow::anyhow!("Failed to convert param value: {}", e))?;
-
-//     log::info!("paramUpdate[{}]", param_name);
-//     // TODO: remove this once we have a way to test the param update
-//     return Ok(param_value);
-
-//     // let request = client_api.param_update(&updating_node_id, &param_name, &param_value);
-//     // let res = request.await;
-//     // match res {
-//     //     Ok(ref v) => log::debug!(
-//     //         "Sent new value for param '{}' to node '{}'. response: {:?}",
-//     //         param_name,
-//     //         subscribing_node_id,
-//     //         &v
-//     //     ),
-//     //     Err(ref e) => log::debug!(
-//     //         "Error sending new value for param '{}' to node '{}': {:?}",
-//     //         param_name,
-//     //         subscribing_node_id,
-//     //         e
-//     //     ),
-//     // }
-
-//     // Ok(res?)
-// }
 
 #[cfg(test)]
 mod tests {
