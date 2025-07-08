@@ -6,7 +6,7 @@ use tokio::task::JoinSet;
 use chrono::NaiveDateTime;
 use dxr::{TryFromValue, TryToValue, Value};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParamTree {
     params: DashMap<String, ParamValue>,
     param_subscriptions: DashMap<String, ParamSubscription>,
@@ -117,13 +117,6 @@ impl TryToValue for ParamValue {
 }
 
 impl ParamTree {
-    pub fn new() -> Self {
-        Self {
-            params: DashMap::new(),
-            param_subscriptions: DashMap::new(),
-        }
-    }
-
     pub fn get_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
 
@@ -281,7 +274,7 @@ impl ParamTree {
         false
     }
 
-    async fn update_subscribers(&self, key: &str, caller_id: String) {
+    pub async fn update_subscribers(&self, key: &str, caller_id: String) {
         let mut update_futures = JoinSet::new();
         let key = key.trim_start_matches('/');
 
@@ -417,6 +410,7 @@ impl ParamValue {
         Ok(())
     }
 
+    /// Returns the value at the given key, or None if the key does not exist.
     fn get(&self, key: &str) -> Result<Option<Value>, String> {
         if let Some((key_prefix, key_rest)) = key.split_once('/') {
             let key_prefix = key_prefix.to_string();
@@ -437,12 +431,7 @@ impl ParamValue {
         } else {
             match self {
                 ParamValue::Structure(hm) => {
-                    return Ok(Some(
-                        hm.get(key)
-                            .unwrap()
-                            .try_to_value()
-                            .map_err(|e| e.to_string())?,
-                    ));
+                    return Ok(hm.get(key).map(|v| v.try_to_value().ok()).flatten());
                 }
                 _ => {
                     return Ok(None);
@@ -530,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_param_value() {
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
         tree.set("run_id", Value::string("asdf-jkl0".to_owned()))
             .unwrap();
         tree.set("robot_configs", Value::i4(23)).unwrap();
@@ -556,7 +545,7 @@ mod tests {
     #[test]
     fn test_param_tree_simple() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
         tree.set("run_id", run_id.clone()).unwrap();
 
         // relative path or absolute path should work
@@ -567,7 +556,7 @@ mod tests {
     #[test]
     fn test_param_tree_set_get() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
         tree.set("run_id", run_id.clone()).unwrap();
 
         let param_value = Value::string("param_value".to_owned());
@@ -583,7 +572,7 @@ mod tests {
     #[test]
     fn test_param_tree_set_get_array() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
         tree.set("run_id", run_id.clone()).unwrap();
 
         let param_value = vec![
@@ -602,7 +591,7 @@ mod tests {
 
     #[test]
     fn test_param_tree_set_get_hashmap() {
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
 
         let param_value = HashMap::from([(
             "param_key".to_owned(),
@@ -635,7 +624,7 @@ mod tests {
     #[test]
     fn test_param_tree_set_get_hashmap_root() {
         let run_id = Value::string("therunid".to_owned());
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
         tree.set("run_id", run_id.clone()).unwrap();
 
         let param_tree = HashMap::from([(
@@ -760,7 +749,7 @@ mod tests {
     }
 
     fn load_state() -> ParamTree {
-        let tree = ParamTree::new();
+        let tree = ParamTree::default();
         tree.set("run_id", Value::string("asdf-jkl0".to_owned()))
             .unwrap();
         tree.set("/", create_complex_value()).unwrap();

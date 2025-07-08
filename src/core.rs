@@ -1,9 +1,8 @@
 extern crate dxr;
 use dxr_client::{Client, ClientBuilder, Url};
 use paste::paste;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use dxr_server::{async_trait, Handler, HandlerResult};
 use dxr_server::{
@@ -13,15 +12,11 @@ use dxr_server::{
 
 use dxr::{DxrError, TryFromParams, TryFromValue, TryToValue, Value};
 
-use crate::utils::{format_params, format_value};
-use crate::{client_api::ClientApi, param_tree::ParamTree};
-
-pub type Services = HashMap<String, HashMap<String, String>>;
-pub type Nodes = HashMap<String, String>;
-pub type Topics = HashMap<String, String>;
-pub type Subscriptions = HashMap<String, HashSet<String>>;
-pub type Publishers = HashMap<String, HashSet<String>>;
-pub type Parameters = Value;
+use crate::param_tree::ParamTree;
+use crate::{
+    master_state::MasterState,
+    utils::{format_params, format_value},
+};
 
 /// An enum that represents the different types of endpoints that can be accessed in the ROS Master API.
 ///
@@ -107,14 +102,12 @@ impl MasterEndpoints {
 
 /// Struct containing information about ROS data.
 pub struct RosData {
-    // RwLocks to allow for concurrent read/write access to data
-    service_list: RwLock<Services>, // stores information about available services
-    nodes: RwLock<Nodes>,           // stores information about nodes connected to the ROS network
-    topics: RwLock<Topics>,         // stores information about available topics
-    subscriptions: RwLock<Subscriptions>, // stores information about topic subscriptions
-    publications: RwLock<Publishers>, // stores information about topic publishers
-    parameters: ParamTree,          // stores information about ROS parameters
-    uri: String,                    // the address of the ROS network
+    /// The master state, which contains information about the ROS network.
+    master_state: MasterState,
+    /// The global parameter tree.
+    parameters: ParamTree,
+    /// The URI to access this ROS master.
+    uri: String,
 }
 
 pub struct Master {
@@ -163,17 +156,9 @@ impl Handler for RegisterServiceHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let service = resolve(&caller_id, &service);
-
         self.data
-            .service_list
-            .write()
-            .unwrap()
-            .entry(service.clone())
-            .or_default()
-            .insert(caller_id.clone(), service_api);
-
-        register_node(&self.data.nodes, &caller_id, &caller_api).await;
+            .master_state
+            .register_service(&caller_id, &service, &service_api, &caller_api);
 
         let status = format!("Registered [{caller_id}] as provider of [{service}]");
         log::info!("+SERVICE [{}] {} {}", service, caller_id, caller_api);
@@ -184,42 +169,6 @@ impl Handler for RegisterServiceHandler {
 
         Ok((1, status, 1).try_to_value()?)
     }
-}
-
-async fn register_node(nodes: &RwLock<Nodes>, caller_id: &str, caller_api: &str) -> () {
-    let shutdown_api_url;
-    {
-        let mut nodes = nodes.write().unwrap();
-        match nodes.entry(caller_id.to_owned()) {
-            Entry::Vacant(v) => {
-                v.insert(caller_api.to_owned());
-                return;
-            }
-            Entry::Occupied(mut e) => {
-                let e = e.get_mut();
-                if e == caller_api {
-                    return;
-                } else {
-                    shutdown_api_url = std::mem::replace(e, caller_api.to_owned());
-                }
-            }
-        }
-    }
-    let res = shutdown_node(&shutdown_api_url, caller_id).await;
-    if let Err(e) = res {
-        log::warn!("Error shutting down previous instance of node '{caller_id}': {e:?}. New node will be registered regardless. Check for stray processes.");
-    }
-}
-
-async fn shutdown_node(client_api_url: &str, node_id: &str) -> anyhow::Result<()> {
-    let client_api = ClientApi::new(client_api_url);
-    let res = client_api
-        .shutdown(
-            "/master",
-            &format!("[{}] Reason: new node registered with same name", node_id),
-        )
-        .await;
-    res
 }
 
 /// Handler for unregistering the caller as a provider of the specified service.
@@ -266,20 +215,10 @@ impl Handler for UnRegisterServiceHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let service = resolve(&caller_id, &service);
-
-        let mut service_list = self.data.service_list.write().unwrap();
-
-        let removed = if let Some(providers) = service_list.get_mut(&service) {
-            providers.remove(&caller_id);
-            providers.is_empty()
-        } else {
-            false
-        };
-
-        if removed {
-            service_list.remove(&service);
-        }
+        let removed = self
+            .data
+            .master_state
+            .unregister_service(&caller_id, &service);
 
         let status = if removed {
             format!("Unregistered [{caller_id}] as provider of [{service}]")
@@ -339,37 +278,12 @@ impl Handler for RegisterSubscriberHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let topic = resolve(&caller_id, &topic);
-
-        if let Some(known_topic_type) = self.data.topics.read().unwrap().get(&topic.clone()) {
-            if known_topic_type != &topic_type && topic_type != "*" {
-                log::warn!("Topic '{topic}' was initially published as '{known_topic_type}', but subscriber '{caller_id}' wants it as '{topic_type}'.");
-            }
-        }
-
-        self.data
-            .subscriptions
-            .write()
-            .unwrap()
-            .entry(topic.clone())
-            .or_default()
-            .insert(caller_id.clone());
-
-        register_node(&self.data.nodes, &caller_id, &caller_api).await;
-
-        let publishers = self
-            .data
-            .publications
-            .read()
-            .unwrap()
-            .get(&topic)
-            .cloned()
-            .unwrap_or_default();
-        let nodes = self.data.nodes.read().unwrap();
-        let publisher_apis: Vec<String> = publishers
-            .iter()
-            .filter_map(|p| nodes.get(p).cloned())
-            .collect();
+        let publisher_apis = self.data.master_state.register_subscriber(
+            &caller_id,
+            &topic,
+            &topic_type,
+            &caller_api,
+        );
 
         let status = format!("Subscribed to [{topic}]");
         log::info!("+SUB [{}] {} {}", topic, caller_id, caller_api);
@@ -418,22 +332,10 @@ impl Handler for UnRegisterSubscriberHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let topic = resolve(&caller_id, &topic);
-
         let removed = self
             .data
-            .subscriptions
-            .write()
-            .unwrap()
-            .entry(topic.clone())
-            .or_default()
-            .remove(&caller_id);
-
-        self.data
-            .subscriptions
-            .write()
-            .unwrap()
-            .retain(|_, v| !v.is_empty());
+            .master_state
+            .unregister_subscriber(&caller_id, &topic);
 
         let status = format!("Unregistered [{caller_id}] as provider of [{topic}]");
         let result = (1, status, if removed { 1 } else { 0 });
@@ -485,94 +387,16 @@ impl Handler for RegisterPublisherHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let topic = resolve(&caller_id, &topic);
+        let subscribers_api_urls =
+            self.data
+                .master_state
+                .register_publisher(&caller_id, &topic, &topic_type, &caller_api);
 
-        if let Some(v) = self.data.topics.read().unwrap().get(&topic.clone()) {
-            if v != &topic_type {
-                log::warn!("New publisher for topic '{topic}' has type '{topic_type}', but it is already published as '{v}'.");
-            }
-        }
-
-        register_node(&self.data.nodes, &caller_id, &caller_api).await;
-
-        // TODO(patwie): Maybe holding the lock for a longer time?
-        // let mut publications = self.data.publications.write().unwrap();
+        // TODO(mj): This should be done in a background task.
         self.data
-            .publications
-            .write()
-            .unwrap()
-            .entry(topic.clone())
-            .or_default()
-            .insert(caller_id.clone());
-        self.data
-            .topics
-            .write()
-            .unwrap()
-            .insert(topic.clone(), topic_type.clone());
-
-        let nodes = self.data.nodes.read().unwrap().clone();
-        let subscribers_api_urls = self
-            .data
-            .subscriptions
-            .read()
-            .unwrap()
-            .get(&topic)
-            .unwrap_or(&HashSet::new())
-            .iter()
-            .map(|s| nodes.get(s))
-            .filter(|a| a.is_some())
-            .map(|a| a.unwrap().to_string())
-            .collect::<Vec<String>>();
-        let publishers = self
-            .data
-            .publications
-            .read()
-            .unwrap()
-            .get(&topic)
-            .cloned()
-            .unwrap_or_default();
-
-        // Inform all subscribers of the new publisher.
-        let publisher_nodes = publishers.into_iter().collect::<Vec<String>>();
-        let publisher_apis = self
-            .data
-            .nodes
-            .read() // Note: This should not be a race condition, because for every publisher, the node has to be there first, and we're reading "nodes" after "publishers".
-            .unwrap()
-            .iter()
-            .filter(|node| publisher_nodes.contains(node.0))
-            .map(|node| node.1.clone())
-            .collect::<Vec<String>>();
-        for client_api_url in subscribers_api_urls.clone() {
-            let client_api = ClientApi::new(client_api_url.as_str());
-            log::debug!("Call {}", client_api_url);
-            log::info!(
-                "publisherUpdate[{}] -> {} {:?}",
-                topic,
-                client_api_url,
-                publisher_apis
-            );
-            let r = client_api
-                .publisher_update(&caller_id.as_str(), &topic.as_str(), &publisher_apis)
-                .await;
-            match r {
-                Err(e) => log::warn!("publisherUpdate call to {} failed: {}", client_api_url, e),
-                Ok(v) => {
-                    log::info!(
-                        "publisherUpdate[{}] -> {} {:?}: sec=0.01, result={:?}",
-                        topic,
-                        client_api_url,
-                        publisher_apis,
-                        v
-                    );
-                    log::debug!(
-                        "publisherUpdate call to {} succeeded, returning: {:?}",
-                        client_api_url,
-                        v
-                    );
-                }
-            }
-        }
+            .master_state
+            .publisher_update(&caller_id, &topic, &subscribers_api_urls)
+            .await;
 
         let status = format!("Registered [{caller_id}] as publisher of [{topic}]");
         log::info!("+PUB [{}] {} {}", topic, caller_id, caller_api);
@@ -611,7 +435,8 @@ impl Handler for UnRegisterPublisherHandler {
             .join(", ");
         log::debug!("unregisterPublisher[{}]", params_str);
         type Request = (String, String, String);
-        let (caller_id, topic, caller_api) = Request::try_from_params(params)?;
+        // TODO(mj): We don't use the caller_api parameter, but we probably should?
+        let (caller_id, topic, _caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
@@ -620,38 +445,21 @@ impl Handler for UnRegisterPublisherHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let topic = resolve(&caller_id, &topic);
-
-        log::debug!("Called {caller_id} with {topic} {caller_api}");
-
-        if self
-            .data
-            .publications
-            .write()
-            .unwrap()
-            .get(&topic.clone())
-            .is_none()
-        {
-            let result = (1, format!("[{caller_id}] is not a registered node"), 0);
-            log::debug!("unregisterPublisher[{}] returns {:?}", params_str, result);
-            return Ok(result.try_to_value()?);
-        }
         let removed = self
             .data
-            .publications
-            .write()
-            .unwrap()
-            .entry(topic.clone())
-            .or_default()
-            .remove(&caller_id);
-        self.data
-            .publications
-            .write()
-            .unwrap()
-            .retain(|_, v| !v.is_empty());
+            .master_state
+            .unregister_publisher(&caller_id, &topic);
 
-        let status = format!("Unregistered [{caller_id}] as provider of [{topic}]");
-        let result = (1, status, if removed { 1 } else { 0 });
+        let result = match removed {
+            Ok(true) => (
+                1,
+                format!("Unregistered [{caller_id}] as provider of [{topic}]"),
+                1,
+            ),
+            Ok(false) => (1, format!("[{caller_id}] is not a registered node"), 0),
+            Err(e) => (-1, e, 0),
+        };
+
         log::debug!("unregisterPublisher{params:?} returns {result:?}");
         Ok(result.try_to_value()?)
     }
@@ -695,16 +503,17 @@ impl Handler for LookupNodeHandler {
             return Ok(result.try_to_value()?);
         }
 
-        if let Some(node_api) = self.data.nodes.read().unwrap().get(&node_name) {
-            let result = (1, "", node_api);
-            log::debug!("lookupNode[{}] returns {:?}", params_str, result);
-            return Ok(result.try_to_value()?);
+        let node_api = self.data.master_state.lookup_node(&node_name);
+
+        let result = if let Some(node_api) = node_api {
+            (1, String::new(), node_api)
         } else {
             let err_msg = format!("unknown node [{}]", node_name);
-            let result = (-1, err_msg, "");
-            log::debug!("lookupNode[{}] returns {:?}", params_str, result);
-            return Ok(result.try_to_value()?);
-        }
+            (-1, err_msg, String::new())
+        };
+
+        log::debug!("lookupNode[{}] returns {:?}", params_str, result);
+        Ok(result.try_to_value()?)
     }
 }
 
@@ -739,16 +548,10 @@ impl Handler for GetPublishedTopicsHandler {
             .join(", ");
         log::debug!("getPublishedTopics[{}]", params_str);
         type Request = (String, String);
-        let (_caller_id, _subgraph) = Request::try_from_params(params)?;
-        let mut result = Vec::<(String, String)>::new();
-        let topics = self.data.topics.read().unwrap().clone();
-        for topic in self.data.publications.read().unwrap().keys() {
-            let data_type = topics.get(&topic.clone());
-            if let Some(data_type) = data_type {
-                result.push((topic.clone(), data_type.to_owned()));
-            }
-        }
-        let response = (1, "current topics", result);
+        let (_caller_id, subgraph) = Request::try_from_params(params)?;
+
+        let topics = self.data.master_state.get_published_topics(&subgraph);
+        let response = (1, "current topics", topics);
         log::debug!("getPublishedTopics[{}] returns {:?}", params_str, response);
         return Ok(response.try_to_value()?);
     }
@@ -782,16 +585,8 @@ impl Handler for GetTopicTypesHandler {
         log::debug!("getTopicTypes[{}]", params_str);
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
-        let result: Vec<_> = self
-            .data
-            .topics
-            .read()
-            .unwrap()
-            .clone()
-            .into_iter()
-            .map(|(k, v)| (k, v))
-            .collect();
-        let response = (1, "current system state", result);
+        let topics = self.data.master_state.get_topic_types();
+        let response = (1, "current system state", topics);
         log::debug!("getTopicTypes[{}] returns {:?}", params_str, response);
         return Ok(response.try_to_value()?);
     }
@@ -829,45 +624,9 @@ impl Handler for GetSystemStateHandler {
         log::debug!("getSystemState[{}]", params_str);
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
-        let publishers: Vec<(String, Vec<String>)> = self
-            .data
-            .publications
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| {
-                let mut node_names: Vec<_> = v.iter().cloned().collect();
-                node_names.sort();
 
-                (k.clone(), node_names)
-            })
-            .collect();
-        let subscribers: Vec<(String, Vec<String>)> = self
-            .data
-            .subscriptions
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| {
-                let mut node_names: Vec<_> = v.iter().cloned().collect();
-                node_names.sort();
+        let (publishers, subscribers, services) = self.data.master_state.get_system_state();
 
-                (k.clone(), node_names)
-            })
-            .collect();
-        let services: Vec<(String, Vec<String>)> = self
-            .data
-            .service_list
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| {
-                let mut node_names: Vec<_> = v.keys().cloned().collect();
-                node_names.sort();
-
-                (k.clone(), node_names)
-            })
-            .collect();
         let response = (1, "", (publishers, subscribers, services));
         log::debug!("getSystemState[{}] returns {:?}", params_str, response);
         return Ok(response.try_to_value()?);
@@ -975,38 +734,13 @@ impl Handler for LookupServiceHandler {
             return Ok(result.try_to_value()?);
         }
 
-        let service = resolve(&caller_id, &service);
+        let service_url = self.data.master_state.lookup_service(&caller_id, &service);
 
-        let services = self
-            .data
-            .service_list
-            .read()
-            .unwrap()
-            .get(&service)
-            .cloned();
-        if services.is_some() {
-            let services = services.unwrap();
-            if services.is_empty() {
-                let result = (-1, "no provider".to_string(), "");
-                log::debug!(
-                    "lookupService[{}] returns {:?}",
-                    format_params(params),
-                    result
-                );
-                return Ok(result.try_to_value()?);
-            } else {
-                let service_url = services.values().next().unwrap();
-                let result = (1, "".to_string(), service_url.clone());
-                log::debug!(
-                    "lookupService[{}] returns {:?}",
-                    format_params(params),
-                    result
-                );
-                return Ok(result.try_to_value()?);
-            }
-        }
+        let result = match service_url {
+            Ok(service_url) => (1, String::new(), service_url),
+            Err(e) => (-1, e, String::new()),
+        };
 
-        let result = (-1, "no provider".to_string(), "");
         log::debug!(
             "lookupService[{}] returns {:?}",
             format_params(params),
@@ -1043,6 +777,11 @@ impl Handler for DeleteParamHandler {
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
         self.data.parameters.delete(&key).await;
+
+        self.data
+            .parameters
+            .update_subscribers(&key, caller_id.clone())
+            .await;
 
         let status = format!("parameter {} deleted", &key);
         let result = (1, status, 0);
@@ -1087,6 +826,11 @@ impl Handler for SetParamHandler {
         let key = resolve(&caller_id, &key);
 
         let status = self.data.parameters.set(&key, value);
+
+        self.data
+            .parameters
+            .update_subscribers(&key, caller_id.clone())
+            .await;
 
         let return_value = match status {
             Ok(_) => {
@@ -1232,7 +976,9 @@ impl Handler for SubscribeParamHandler {
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
 
-        register_node(&self.data.nodes, &caller_id, &caller_api).await;
+        self.data
+            .master_state
+            .register_node(&caller_id, &caller_api);
 
         let value = self
             .data
@@ -1474,12 +1220,8 @@ impl Master {
     pub fn new(uri: String) -> Master {
         Master {
             data: Arc::new(RosData {
-                service_list: RwLock::new(Services::new()),
-                nodes: RwLock::new(Nodes::new()),
-                topics: RwLock::new(Topics::new()),
-                subscriptions: RwLock::new(Subscriptions::new()),
-                publications: RwLock::new(Publishers::new()),
-                parameters: ParamTree::new(),
+                master_state: MasterState::default(),
+                parameters: ParamTree::default(),
                 uri,
             }),
         }

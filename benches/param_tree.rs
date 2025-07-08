@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 fn create_test_tree() -> Arc<ParamTree> {
-    let tree = Arc::new(ParamTree::new());
+    let tree = Arc::new(ParamTree::default());
 
     // Initialize with some test data
     let runtime = Runtime::new().unwrap();
@@ -178,16 +178,13 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
         b.iter(|| {
             runtime.block_on(async {
                 for i in 0..10 {
-                    let _value = tree
-                        .subscribe(
-                            format!("node_{}", i),
-                            "/".to_string(),
-                            format!("http://node_{}", i),
-                        )
-                        .await;
+                    let _value = tree.subscribe(
+                        format!("node_{}", i),
+                        "/".to_string(),
+                        format!("http://node_{}", i),
+                    );
 
-                    tree.unsubscribe(format!("http://node_{}", i), "/".to_string())
-                        .await;
+                    tree.unsubscribe(format!("http://node_{}", i), "/".to_string());
                 }
             });
         });
@@ -202,13 +199,11 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
                     .map(|i| {
                         let tree = tree.clone();
                         tokio::spawn(async move {
-                            let _value = tree
-                                .subscribe(
-                                    format!("node_{}", i),
-                                    "/".to_string(),
-                                    format!("http://node_{}", i),
-                                )
-                                .await;
+                            let _value = tree.subscribe(
+                                format!("node_{}", i),
+                                "/".to_string(),
+                                format!("http://node_{}", i),
+                            );
                         })
                     })
                     .collect();
@@ -259,7 +254,7 @@ fn benchmark_mixed_operations(c: &mut Criterion) {
                                     "/".to_string(),
                                     format!("http://node_{}", i),
                                 )
-                                .await;
+                                .unwrap();
                         })
                     })
                     .collect();
@@ -276,8 +271,8 @@ fn benchmark_mixed_operations(c: &mut Criterion) {
                         tokio::spawn(async move {
                             for j in 0..5 {
                                 // Read operations
-                                black_box(tree.get("robot_id"));
-                                black_box(tree.contains("arms/left/length"));
+                                black_box(tree.get("robot_id").unwrap());
+                                black_box(tree.contains("arms/left/length").unwrap());
 
                                 // Write operations
                                 tree.set(&format!("param_{}_{}", i, j), Value::i4(j).into())

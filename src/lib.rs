@@ -18,12 +18,12 @@
 //!
 pub mod client_api;
 pub mod core;
+pub mod master_state;
+pub mod param_tree;
 mod utils;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use url::Url;
-
-pub mod param_tree;
 
 pub fn url_to_socket_addr(url: &Url) -> anyhow::Result<SocketAddr> {
     let ip_addr = match url.host() {
