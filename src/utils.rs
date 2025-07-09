@@ -18,7 +18,7 @@ pub fn format_value(value: &Value) -> String {
 
     // Try string first
     if let Ok(s) = String::try_from_value(value) {
-        return format!("\"{}\"", s);
+        return format!("'{}'", s.replace("\n", "\\n"));
     }
 
     // Try boolean
@@ -52,7 +52,7 @@ pub fn format_value(value: &Value) -> String {
     if let Ok(map) = std::collections::HashMap::<String, Value>::try_from_value(value) {
         let formatted_pairs: Vec<String> = map
             .iter()
-            .map(|(k, v)| format!("{}: {}", k, format_value(v)))
+            .map(|(k, v)| format!("'{}': {}", k, format_value(v)))
             .collect();
         return format!("{{{}}}", formatted_pairs.join(", "));
     }
@@ -190,5 +190,20 @@ mod tests {
             Value::boolean(false),
         ];
         assert_eq!(format_params(&params), "\"foo\", 42, false");
+    }
+
+    #[test]
+    fn test_complex_value() {
+        // [2025-07-09T12:23:40Z DEBUG ros_core_rs::core] registerPublisher[Value { value: String("/ln_rst_test_node") }, Value { value: String("/rosout") }, Value { value: String("rosgraph_msgs/Log") }, Value { value: String("http://LOCLAP858:41145/") }]
+        let value = vec![
+            "/ln_rst_test_node".to_string(),
+            "/rosout".to_string(),
+            "rosgraph_msgs/Log".to_string(),
+            "http://LOCLAP858:41145/".to_string(),
+        ]
+        .try_to_value()
+        .unwrap();
+
+        assert_eq!(format_value(&value), "[\"/ln_rst_test_node\", \"/rosout\", \"rosgraph_msgs/Log\", \"http://LOCLAP858:41145/\"]");
     }
 }

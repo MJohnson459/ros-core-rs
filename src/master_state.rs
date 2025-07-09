@@ -98,8 +98,6 @@ impl MasterState {
             .or_default()
             .insert(caller_id.to_string());
 
-        println!("subscriptions: {:?}", self.subscriptions);
-
         self.register_node(&caller_id, &caller_api);
 
         let publishers = self
@@ -108,15 +106,10 @@ impl MasterState {
             .map(|p| p.clone())
             .unwrap_or_default();
 
-        println!("publishers: {:?}", publishers);
-        println!("nodes: {:?}", self.nodes);
-
         let publisher_apis: Vec<String> = publishers
             .iter()
             .filter_map(|p| self.nodes.get(p).map(|n| n.to_string()))
             .collect();
-
-        println!("publisher_apis: {:?}", publisher_apis);
 
         publisher_apis
     }
@@ -442,6 +435,13 @@ mod tests {
     }
 
     #[test]
+    fn test_unregister_service() {
+        let master_state = MasterState::default();
+        master_state.register_service("node_1", "service", "http://node_1", "http://node_1");
+        assert_eq!(master_state.unregister_service("node_1", "service"), true);
+    }
+
+    #[test]
     fn test_register_subscriber() {
         let master_state = MasterState::default();
         master_state.register_subscriber("node_1", "topic", "std_msgs/String", "http://node_1");
@@ -451,12 +451,29 @@ mod tests {
     }
 
     #[test]
+    fn test_unregister_subscriber() {
+        let master_state = MasterState::default();
+        master_state.register_subscriber("node_1", "topic", "std_msgs/String", "http://node_1");
+        assert_eq!(master_state.unregister_subscriber("node_1", "topic"), true);
+    }
+
+    #[test]
     fn test_register_publisher() {
         let master_state = MasterState::default();
         master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
         assert!(master_state
             .lookup_publisher("node_1", "topic")
             .contains(&"node_1".to_string()),);
+    }
+
+    #[test]
+    fn test_unregister_publisher() {
+        let master_state = MasterState::default();
+        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        assert_eq!(
+            master_state.unregister_publisher("node_1", "topic"),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -476,6 +493,40 @@ mod tests {
         assert_eq!(
             master_state.get_topic_types(),
             vec![("topic".to_string(), "std_msgs/String".to_string())],
+        );
+    }
+
+    #[test]
+    fn test_get_system_state() {
+        let master_state = MasterState::default();
+        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        assert_eq!(
+            master_state.get_system_state(),
+            (
+                vec![("topic".to_string(), vec!["node_1".to_string()])],
+                vec![],
+                vec![]
+            ),
+        );
+    }
+
+    #[test]
+    fn test_lookup_service() {
+        let master_state = MasterState::default();
+        master_state.register_service("node_1", "service", "http://node_1", "http://node_1");
+        assert_eq!(
+            master_state.lookup_service("node_1", "service"),
+            Ok("http://node_1".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_lookup_node() {
+        let master_state = MasterState::default();
+        master_state.register_node("node_1", "http://node_1");
+        assert_eq!(
+            master_state.lookup_node("node_1"),
+            Some("http://node_1".to_string()),
         );
     }
 }

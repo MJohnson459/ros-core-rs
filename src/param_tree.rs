@@ -9,7 +9,8 @@ use dxr::{TryFromValue, TryToValue, Value};
 #[derive(Debug, Default)]
 pub struct ParamTree {
     params: DashMap<String, ParamValue>,
-    param_subscriptions: DashMap<String, ParamSubscription>,
+    /// A map of (node_id, param_name) to their api_uri.
+    param_subscriptions: DashMap<String, Vec<ParamSubscription>>,
 }
 
 impl Display for ParamTree {
@@ -129,7 +130,7 @@ impl ParamTree {
     }
 
     pub fn contains(&self, key: &str) -> Result<bool, String> {
-        let key = key.trim_start_matches('/');
+        let key = key.trim_matches('/');
         if key == "" {
             return Ok(!self.params.is_empty());
         }
@@ -154,7 +155,7 @@ impl ParamTree {
         // 2. Remove any existing subtrees that are children of the key
         // 3. Insert the key-value pair into the database
         // 4. Update the subscribers (ignore for now)
-        let key = key.trim_start_matches('/');
+        let key = key.trim_matches('/');
 
         if key == "" {
             // root node so reset entire tree
@@ -165,7 +166,9 @@ impl ParamTree {
                     self.set(&key, value)?;
                 }
             } else {
-                return Err(format!("Root node must be a hashmap: {:?}", value));
+                return Err(format!(
+                    "invalid arguments: cannot set root of parameter tree to non-dictionary"
+                ));
             }
 
             return Ok(());
@@ -194,7 +197,7 @@ impl ParamTree {
         // 1. We will need to get all values that have a prefix of the key
         // 2. We will need to decode the values
         // 3. We will need to convert those into a single Value
-        let key = key.trim_start_matches('/');
+        let key = key.trim_matches('/');
 
         if key == "" {
             // root node so return entire tree as a hashmap
@@ -221,13 +224,46 @@ impl ParamTree {
         return Ok(None);
     }
 
-    pub async fn delete(&self, key: &str) {
-        // 1. We will need to delete all entries that have a prefix of the key
-        let key = key.trim_start_matches('/');
+    /// Search for parameter key on parameter server. Search starts in caller's namespace and proceeds upwards through parent namespaces until Parameter Server finds a matching key.
+    ///
+    /// searchParam's behavior is to search for the first partial match. For example, imagine that there are two 'robot_description' parameters:
+    ///
+    ///   /robot_description
+    ///     /robot_description/arm
+    ///     /robot_description/base
+    ///   /pr2/robot_description
+    ///     /pr2/robot_description/base
+    /// If I start in the namespace /pr2/foo and search for 'robot_description', searchParam will match /pr2/robot_description. If I search for 'robot_description/arm' it will return /pr2/robot_description/arm, even though that parameter does not exist (yet).
+    pub fn search(&self, caller_id: &str, key: &str) -> Result<Option<Value>, String> {
+        let caller_id = caller_id.trim_matches('/');
+        let key = key.trim_matches('/');
 
-        if let Some(_value) = self.params.get(key) {
-            self.params.remove(key);
-            return;
+        let mut namespace = caller_id.split('/').collect::<Vec<&str>>();
+        let first_key = key.split('/').next().unwrap_or(key);
+
+        loop {
+            let param = namespace.join("/");
+            let param_name = format!("{param}/{first_key}");
+
+            if let Ok(true) = self.contains(&param_name) {
+                let full_name = format!("/{param}/{key}");
+                return Ok(Some(full_name.try_to_value().map_err(|e| e.to_string())?));
+            }
+
+            if namespace.pop().is_none() {
+                break;
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn delete(&self, key: &str) -> bool {
+        // 1. We will need to delete all entries that have a prefix of the key
+        let key = key.trim_matches('/');
+
+        if self.params.remove(key).is_some() {
+            return true;
         }
 
         if let Some((key_prefix, key_rest)) = key.split_once('/') {
@@ -236,64 +272,106 @@ impl ParamTree {
 
             if let Some(mut value) = self.params.get_mut(&key_prefix) {
                 value.delete(&key_rest);
+                return true;
             }
         }
+
+        return false;
 
         // self.update_subscribers(key, caller_id).await;
     }
 
     pub fn subscribe(
         &self,
-        node_id: String,
+        caller_id: String,
         param: String,
         api_uri: String,
     ) -> Result<Option<Value>, String> {
         // replace old entry if subscribing node has restarted
-        if let Some(mut subscription) = self.param_subscriptions.get_mut(&param) {
-            if subscription.node_id == node_id {
-                subscription.api_uri = api_uri;
-                return self.get(&param);
+        if let Some(mut existing_param_sub) = self.param_subscriptions.get_mut(&param) {
+            if let Some(existing_api_uri) = existing_param_sub
+                .iter_mut()
+                .find(|s| s.node_id == caller_id)
+            {
+                if existing_api_uri.api_uri != api_uri {
+                    // URI needs updated
+                    existing_api_uri.api_uri = api_uri.clone();
+                } else {
+                    log::debug!("{} is already subscribed to {}", caller_id, param);
+                }
+            } else {
+                // A new node is subscribing to this param
+                existing_param_sub.push(ParamSubscription {
+                    node_id: caller_id.clone(),
+                    api_uri,
+                });
             }
+        } else {
+            // A new param is being subscribed to
+            self.param_subscriptions.insert(
+                param.clone(),
+                vec![ParamSubscription {
+                    node_id: caller_id.clone(),
+                    api_uri,
+                }],
+            );
         }
-
-        // add a new entry if it's a new node id
-        self.param_subscriptions
-            .insert(param.clone(), ParamSubscription { node_id, api_uri });
 
         self.get(&param)
     }
 
     /// Returns true if the subscription was removed, false if it was not found.
-    pub fn unsubscribe(&self, caller_api: String, key: String) -> bool {
-        for subscription in self.param_subscriptions.iter() {
-            if subscription.value().api_uri == caller_api && subscription.key() == &key {
-                self.param_subscriptions.remove(subscription.key());
-                return true;
+    pub fn unsubscribe(&self, caller_id: String, param: String, _api_uri: String) -> bool {
+        let mut removed = false;
+        let mut needs_cleanup = false;
+
+        if let Some(mut existing_param_sub) = self.param_subscriptions.get_mut(&param) {
+            if let Some(_existing_api_uri) = existing_param_sub
+                .iter_mut()
+                .find(|s| s.node_id == caller_id)
+            {
+                existing_param_sub.retain(|s| s.node_id != caller_id);
+                if existing_param_sub.is_empty() {
+                    needs_cleanup = true;
+                }
+
+                removed = true;
             }
         }
-        false
+
+        if needs_cleanup {
+            self.param_subscriptions.remove(&param);
+        }
+
+        removed
     }
 
     pub async fn update_subscribers(&self, key: &str, caller_id: String) {
         let mut update_futures = JoinSet::new();
-        let key = key.trim_start_matches('/');
+        let key = key.trim_matches('/');
 
         for subscription in self.param_subscriptions.iter() {
             if subscription.key().starts_with(key) {
                 let value = self.get(subscription.key()).unwrap();
                 if let Some(new_value) = value {
-                    update_futures.spawn(update_client_with_new_param_value(
-                        subscription.api_uri.clone(),
-                        caller_id.clone(),
-                        subscription.node_id.clone(),
-                        subscription.key().to_string(),
-                        ParamValue::try_from_value(&new_value).unwrap(),
-                    ));
+                    for node in subscription.value().iter() {
+                        update_futures.spawn(update_client_with_new_param_value(
+                            node.api_uri.clone(),
+                            caller_id.clone(),
+                            node.node_id.clone(),
+                            subscription.key().to_string(),
+                            ParamValue::try_from_value(&new_value).unwrap(),
+                        ));
+                    }
                 } else {
                     log::warn!(
-                        "Parameter {} no longer exists, skipping update for subscriber {}",
+                        "Parameter {} no longer exists, skipping update for subscriber {:?}",
                         subscription.key(),
-                        subscription.node_id
+                        subscription
+                            .value()
+                            .iter()
+                            .map(|s| s.node_id.clone())
+                            .collect::<Vec<_>>()
                     );
                 }
             }
@@ -343,7 +421,14 @@ impl ParamValue {
                 }
             }
         } else {
-            return true;
+            match self {
+                ParamValue::Structure(hm) => {
+                    return hm.contains_key(key);
+                }
+                _ => {
+                    return false;
+                }
+            }
         }
     }
 
@@ -555,9 +640,7 @@ mod tests {
 
     #[test]
     fn test_param_tree_set_get() {
-        let run_id = Value::string("therunid".to_owned());
         let tree = ParamTree::default();
-        tree.set("run_id", run_id.clone()).unwrap();
 
         let param_value = Value::string("param_value".to_owned());
         tree.set("some/param", param_value.clone()).unwrap();
@@ -567,6 +650,65 @@ mod tests {
         // relative path or absolute path should work
         assert_eq!(tree.get("some/param").unwrap(), Some(param_value.clone()));
         assert_eq!(tree.get("/some/param").unwrap(), Some(param_value.clone()));
+    }
+
+    #[test]
+    fn test_param_tree_get_relative() {
+        let tree = ParamTree::default();
+
+        let param_value = Value::string("param_value".to_owned());
+        tree.set("some/param", param_value.clone()).unwrap();
+    }
+
+    #[test]
+    fn test_has_param() {
+        let tree = ParamTree::default();
+        tree.set("some/param", Value::string("param_value".to_owned()))
+            .unwrap();
+        assert!(tree.contains("some/param").unwrap());
+        assert!(!tree.contains("some/param2").unwrap());
+    }
+
+    #[test]
+    fn test_has_param_with_slash() {
+        let tree = ParamTree::default();
+        tree.set("some/param", Value::string("param_value".to_owned()))
+            .unwrap();
+        assert!(tree.contains("some/param/").unwrap());
+        assert!(!tree.contains("some/param2/").unwrap());
+    }
+
+    #[test]
+    fn test_has_search_param() {
+        let tree = ParamTree::default();
+        tree.set("robot_description/arm", Value::string("arm1".to_owned()))
+            .unwrap();
+        tree.set("robot_description/base", Value::string("base1".to_owned()))
+            .unwrap();
+
+        tree.set(
+            "pr2/robot_description/base",
+            Value::string("base2".to_owned()),
+        )
+        .unwrap();
+
+        let res = tree
+            .search("pr2/foo", "robot_description")
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Value::string("pr2/robot_description".to_owned()));
+
+        let res = tree
+            .search("pr2/foo", "robot_description/arm")
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Value::string("pr2/robot_description/arm".to_owned()));
+
+        let res = tree
+            .search("pr2/foo", "robot_description/base")
+            .unwrap()
+            .unwrap();
+        assert_eq!(res, Value::string("pr2/robot_description/base".to_owned()));
     }
 
     #[test]
@@ -770,5 +912,49 @@ mod tests {
         assert!(keys.contains(&"/sim_001/sensors/camera/fps".to_owned()));
         assert!(keys.contains(&"/sim_001/sensors/lidar/range".to_owned()));
         assert!(keys.contains(&"/sim_001/sensors/lidar/frequency".to_owned()));
+    }
+
+    #[test]
+    fn test_param_multiple_subscribers() {
+        let tree = load_state();
+        tree.subscribe(
+            "node_1".to_string(),
+            "param_key".to_string(),
+            "http://node_1".to_string(),
+        )
+        .unwrap();
+        tree.subscribe(
+            "node_2".to_string(),
+            "param_key".to_string(),
+            "http://node_2".to_string(),
+        )
+        .unwrap();
+
+        println!("{:#?}", tree.param_subscriptions);
+
+        assert!(tree
+            .param_subscriptions
+            .get("param_key")
+            .unwrap()
+            .iter()
+            .any(|s| s.node_id == "node_1"));
+        assert!(tree
+            .param_subscriptions
+            .get("param_key")
+            .unwrap()
+            .iter()
+            .any(|s| s.api_uri == "http://node_1"));
+        assert!(tree
+            .param_subscriptions
+            .get("param_key")
+            .unwrap()
+            .iter()
+            .any(|s| s.node_id == "node_2"));
+        assert!(tree
+            .param_subscriptions
+            .get("param_key")
+            .unwrap()
+            .iter()
+            .any(|s| s.api_uri == "http://node_2"));
     }
 }

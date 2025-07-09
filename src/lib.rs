@@ -20,7 +20,7 @@ pub mod client_api;
 pub mod core;
 pub mod master_state;
 pub mod param_tree;
-mod utils;
+pub mod utils;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use url::Url;

@@ -179,12 +179,16 @@ fn benchmark_subscription_operations(c: &mut Criterion) {
             runtime.block_on(async {
                 for i in 0..10 {
                     let _value = tree.subscribe(
-                        format!("node_{}", i),
+                        format!("node_{i}"),
                         "/".to_string(),
-                        format!("http://node_{}", i),
+                        format!("http://node_{i}"),
                     );
 
-                    tree.unsubscribe(format!("http://node_{}", i), "/".to_string());
+                    tree.unsubscribe(
+                        format!("node_{i}"),
+                        "/".to_string(),
+                        format!("http://node_{i}"),
+                    );
                 }
             });
         });
