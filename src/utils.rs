@@ -18,7 +18,7 @@ pub fn format_value(value: &Value) -> String {
 
     // Try string first
     if let Ok(s) = String::try_from_value(value) {
-        return format!("'{}'", s.replace("\n", "\\n"));
+        return format!("'{}'", s.replace(['\n', '\r'], ""));
     }
 
     // Try boolean
