@@ -12,11 +12,11 @@ use dxr_server::{
 
 use dxr::{DxrError, TryFromParams, TryFromValue, TryToValue, Value};
 
-use crate::param_tree::ParamTree;
 use crate::{
     master_state::MasterState,
-    utils::{format_params, format_value},
+    utils::{format_params, format_return_value, format_value},
 };
+use crate::{param_tree::ParamTree, utils::format_topic_list};
 
 /// An enum that represents the different types of endpoints that can be accessed in the ROS Master API.
 ///
@@ -142,7 +142,7 @@ impl Handler for RegisterServiceHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("registerService({params_str})");
+        log::debug!("registerService[{params_str}]");
         type Request = (String, String, String, String);
         let (caller_id, service, service_api, caller_api) = Request::try_from_params(params)?;
 
@@ -154,9 +154,12 @@ impl Handler for RegisterServiceHandler {
                 0,
             );
             log::debug!(
-                "registerService[{}] returns {:?}",
-                format_params(params),
-                result
+                "registerService[{params_str}] returns {}",
+                format_return_value(
+                    -1,
+                    "ERROR: parameter [service] must be a non-empty string",
+                    &Value::i4(0)
+                )
             );
             return Ok(result.try_to_value()?);
         }
@@ -167,7 +170,10 @@ impl Handler for RegisterServiceHandler {
 
         let status = format!("Registered [{caller_id}] as provider of [{service}]");
         log::info!("+SERVICE [{}] {} {}", service, caller_id, caller_api);
-        log::debug!("registerService({params_str}) returns (1, '{status}', 1)");
+        log::debug!(
+            "registerService[{params_str}] returns {}",
+            format_return_value(1, &status, &Value::i4(1))
+        );
 
         Ok((1, status, 1).try_to_value()?)
     }
@@ -203,7 +209,7 @@ impl Handler for UnRegisterServiceHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("unregisterService({params_str})");
+        log::debug!("unregisterService[{params_str}]");
 
         type Request = (String, String, String);
         let (caller_id, service, _service_api) = Request::try_from_params(params)?;
@@ -216,9 +222,12 @@ impl Handler for UnRegisterServiceHandler {
                 0,
             );
             log::debug!(
-                "unregisterService({}) returns {:?}",
-                format_params(params),
-                result
+                "unregisterService[{params_str}] returns {}",
+                format_return_value(
+                    -1,
+                    "ERROR: parameter [service] must be a non-empty string",
+                    &Value::i4(0)
+                )
             );
             return Ok(result.try_to_value()?);
         }
@@ -233,8 +242,11 @@ impl Handler for UnRegisterServiceHandler {
         } else {
             format!("[{caller_id}] is not a registered node")
         };
-        let result = (1, status, if removed { 1 } else { 0 });
-        log::debug!("unregisterService({params_str}) returns {result:?}");
+        let result = (1, status.clone(), if removed { 1 } else { 0 });
+        log::debug!(
+            "unregisterService[{params_str}] returns {}",
+            format_return_value(1, &status, &Value::i4(if removed { 1 } else { 0 }))
+        );
         Ok(result.try_to_value()?)
     }
 }
@@ -267,7 +279,7 @@ impl Handler for RegisterSubscriberHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("registerSubscriber({params_str})");
+        log::debug!("registerSubscriber[{params_str}]");
         type Request = (String, String, String, String);
         let (caller_id, topic, topic_type, caller_api) = Request::try_from_params(params)?;
 
@@ -278,7 +290,14 @@ impl Handler for RegisterSubscriberHandler {
                 "ERROR: parameter [topic] must be a non-empty string",
                 Vec::<String>::new(),
             );
-            log::debug!("registerSubscriber({params_str}) returns {result:?}");
+            log::debug!(
+                "registerSubscriber[{params_str}] returns {}",
+                format_return_value(
+                    -1,
+                    "ERROR: parameter [topic] must be a non-empty string",
+                    &Vec::<String>::new().try_to_value().unwrap()
+                )
+            );
             return Ok(result.try_to_value()?);
         }
 
@@ -291,7 +310,10 @@ impl Handler for RegisterSubscriberHandler {
 
         let status = format!("Subscribed to [{topic}]");
         log::info!("+SUB [{}] {} {}", topic, caller_id, caller_api);
-        log::debug!("registerSubscriber({params_str}) returns (1, '{status}', {publisher_apis:?})");
+        log::debug!(
+            "registerSubscriber[{params_str}] returns {}",
+            format_return_value(1, &status, &publisher_apis.try_to_value().unwrap())
+        );
         return Ok((1, status, publisher_apis).try_to_value()?);
     }
 }
@@ -325,14 +347,14 @@ impl Handler for UnRegisterSubscriberHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("unregisterSubscriber({params_str})");
+        log::debug!("unregisterSubscriber[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, topic, _caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
             let result = (-1, "ERROR: parameter [topic] must be a non-empty string", 0);
-            log::debug!("unregisterSubscriber({params_str}) returns {result:?}");
+            log::debug!("unregisterSubscriber[{params_str}] returns {result:?}");
             return Ok(result.try_to_value()?);
         }
 
@@ -343,7 +365,10 @@ impl Handler for UnRegisterSubscriberHandler {
 
         let status = format!("Unregistered [{caller_id}] as provider of [{topic}]");
         let result = (1, status, if removed { 1 } else { 0 });
-        log::debug!("unregisterSubscriber({params_str}) returns {result:?}");
+        log::debug!(
+            "unregisterSubscriber[{params_str}] returns {}",
+            format_return_value(result.0, &result.1, &Value::i4(result.2))
+        );
         Ok(result.try_to_value()?)
     }
 }
@@ -376,7 +401,7 @@ impl Handler for RegisterPublisherHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("registerPublisher({params_str})");
+        log::debug!("registerPublisher[{params_str}]");
         type Request = (String, String, String, String);
         let (caller_id, topic, topic_type, caller_api) = Request::try_from_params(params)?;
 
@@ -387,7 +412,7 @@ impl Handler for RegisterPublisherHandler {
                 "ERROR: parameter [topic] must be a non-empty string",
                 Vec::<String>::new(),
             );
-            log::debug!("registerPublisher({params_str}) returns {result:?}");
+            log::debug!("registerPublisher[{params_str}] returns {result:?}");
             return Ok(result.try_to_value()?);
         }
 
@@ -400,7 +425,8 @@ impl Handler for RegisterPublisherHandler {
         let status = format!("Registered [{caller_id}] as publisher of [{topic}]");
         log::info!("+PUB [{}] {} {}", topic, caller_id, caller_api);
         log::debug!(
-            "registerPublisher({params_str}) returns (1, '{status}', {subscribers_api_urls:?})"
+            "registerPublisher[{params_str}] returns {}",
+            format_return_value(1, &status, &subscribers_api_urls.try_to_value().unwrap())
         );
 
         // TODO(mj): This should be done in a background task.
@@ -441,7 +467,7 @@ impl Handler for UnRegisterPublisherHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("unregisterPublisher({params_str})");
+        log::debug!("unregisterPublisher[{params_str}]");
         type Request = (String, String, String);
         // TODO(mj): We don't use the caller_api parameter, but we probably should?
         let (caller_id, topic, _caller_api) = Request::try_from_params(params)?;
@@ -449,7 +475,7 @@ impl Handler for UnRegisterPublisherHandler {
         // Check for empty topic parameter
         if topic.trim().is_empty() {
             let result = (-1, "ERROR: parameter [topic] must be a non-empty string", 0);
-            log::debug!("unregisterPublisher({params_str}) returns {result:?}");
+            log::debug!("unregisterPublisher[{params_str}] returns {result:?}");
             return Ok(result.try_to_value()?);
         }
 
@@ -468,7 +494,10 @@ impl Handler for UnRegisterPublisherHandler {
             Err(e) => (-1, e, 0),
         };
 
-        log::debug!("unregisterPublisher({params_str}) returns {result:?}");
+        log::debug!(
+            "unregisterPublisher[{params_str}] returns {}",
+            format_return_value(result.0, &result.1, &Value::i4(result.2))
+        );
         Ok(result.try_to_value()?)
     }
 }
@@ -500,14 +529,14 @@ impl Handler for LookupNodeHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("lookupNode({params_str})");
+        log::debug!("lookupNode[{params_str}]");
         type Request = (String, String);
         let (_caller_id, node_name) = Request::try_from_params(params)?;
 
         // Check for empty node parameter
         if node_name.trim().is_empty() {
             let result = (-1, "ERROR: parameter [node] must be a non-empty string", "");
-            log::debug!("lookupNode({params_str}) returns {result:?}");
+            log::debug!("lookupNode[{params_str}] returns {result:?}");
             return Ok(result.try_to_value()?);
         }
 
@@ -520,7 +549,10 @@ impl Handler for LookupNodeHandler {
             (-1, err_msg, String::new())
         };
 
-        log::debug!("lookupNode({params_str}) returns {result:?}");
+        log::debug!(
+            "lookupNode[{params_str}] returns {}",
+            format_return_value(result.0, &result.1, &result.2.try_to_value().unwrap())
+        );
         Ok(result.try_to_value()?)
     }
 }
@@ -554,13 +586,16 @@ impl Handler for GetPublishedTopicsHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getPublishedTopics({params_str})");
+        log::debug!("getPublishedTopics[{params_str}]");
         type Request = (String, String);
         let (_caller_id, subgraph) = Request::try_from_params(params)?;
 
         let topics = self.data.master_state.get_published_topics(&subgraph);
+        log::debug!(
+            "getPublishedTopics[{params_str}] returns {}",
+            format_return_value(1, "current topics", &topics.try_to_value().unwrap())
+        );
         let response = (1, "current topics", topics);
-        log::debug!("getPublishedTopics({params_str}) returns {response:?}");
         return Ok(response.try_to_value()?);
     }
 }
@@ -590,12 +625,15 @@ impl Handler for GetTopicTypesHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getTopicTypes({params_str})");
+        log::debug!("getTopicTypes[{params_str}]");
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
         let topics = self.data.master_state.get_topic_types();
+        log::debug!(
+            "getTopicTypes[{params_str}] returns {}",
+            format_return_value(1, "current system state", &topics.try_to_value().unwrap())
+        );
         let response = (1, "current system state", topics);
-        log::debug!("getTopicTypes({params_str}) returns {response:?}");
         return Ok(response.try_to_value()?);
     }
 }
@@ -629,14 +667,25 @@ impl Handler for GetSystemStateHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getSystemState({params_str})");
+        log::debug!("getSystemState[{params_str}]");
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
 
         let (publishers, subscribers, services) = self.data.master_state.get_system_state();
-
+        let publishers_clone = publishers.clone();
+        let subscribers_clone = subscribers.clone();
+        let services_clone = services.clone();
         let response = (1, "", (publishers, subscribers, services));
-        log::debug!("getSystemState({params_str}) returns {:?}", response);
+        log::debug!(
+            "getSystemState[{params_str}] returns {}",
+            format_return_value(
+                1,
+                "",
+                &((publishers_clone, subscribers_clone, services_clone))
+                    .try_to_value()
+                    .unwrap()
+            )
+        );
         return Ok(response.try_to_value()?);
     }
 }
@@ -666,10 +715,13 @@ impl Handler for GetUriHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getUri({params_str})");
+        log::debug!("getUri[{params_str}]");
 
         let response = (1, "", self.data.uri.clone());
-        log::debug!("getUri({params_str}) returns {response:?}");
+        log::debug!(
+            "getUri[{params_str}] returns {}",
+            format_return_value(1, "", &self.data.uri.clone().try_to_value().unwrap())
+        );
         return Ok(response.try_to_value()?);
     }
 }
@@ -700,12 +752,15 @@ impl Handler for GetPidHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getPid({params_str})");
+        log::debug!("getPid[{params_str}]");
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
         let result = std::process::id() as i32; // max pid on linux is 2^22, so the typecast should have no unintended side effects
         let response = (1, "", result);
-        log::debug!("getPid({params_str}) returns {response:?}");
+        log::debug!(
+            "getPid[{params_str}] returns {}",
+            format_return_value(1, "", &Value::i4(result))
+        );
         return Ok(response.try_to_value()?);
     }
 }
@@ -737,7 +792,7 @@ impl Handler for LookupServiceHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("lookupService({params_str})");
+        log::debug!("lookupService[{params_str}]");
         type Request = (String, String);
         let (caller_id, service) = Request::try_from_params(params)?;
 
@@ -759,7 +814,10 @@ impl Handler for LookupServiceHandler {
             Err(e) => (-1, e, String::new()),
         };
 
-        log::debug!("lookupService({params_str}) returns {result:?}");
+        log::debug!(
+            "lookupService[{params_str}] returns {}",
+            format_return_value(result.0, &result.1, &result.2.try_to_value().unwrap())
+        );
         return Ok(result.try_to_value()?);
     }
 }
@@ -791,7 +849,7 @@ impl Handler for DeleteParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("deleteParam({params_str})");
+        log::debug!("deleteParam[{params_str}]");
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
@@ -804,7 +862,10 @@ impl Handler for DeleteParamHandler {
             (-1, format!("parameter [{key}] is not set"), 0)
         };
 
-        log::debug!("deleteParam({params_str}) returns {result:?}");
+        log::debug!(
+            "deleteParam[{params_str}] returns {}",
+            format_return_value(result.0, &result.1, &Value::i4(result.2))
+        );
 
         self.data
             .parameters
@@ -846,7 +907,7 @@ impl Handler for SetParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("setParam({params_str})");
+        log::debug!("setParam[{params_str}]");
         type Request = (String, String, Value);
         let (caller_id, key, value) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
@@ -862,7 +923,10 @@ impl Handler for SetParamHandler {
             Err(e) => (-1, format!("Error: {e}"), 0),
         };
 
-        log::debug!("setParam({params_str}) returns {return_value:?}");
+        log::debug!(
+            "setParam[{params_str}] returns {}",
+            format_return_value(return_value.0, &return_value.1, &Value::i4(return_value.2))
+        );
 
         self.data
             .parameters
@@ -901,7 +965,7 @@ impl Handler for GetParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getParam({params_str})");
+        log::debug!("getParam[{params_str}]");
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
         let key_full = resolve(&caller_id, &key);
@@ -909,13 +973,20 @@ impl Handler for GetParamHandler {
         let response = match self.data.parameters.get(&key_full) {
             Ok(Some(value)) => {
                 log::debug!(
-                    "getParam({params_str}) returns (1, '{key_full}', {})",
-                    format_value(&value)
+                    "getParam[{params_str}] returns {}",
+                    format_return_value(1, &format!("Parameter [{key_full}]"), &value)
                 );
                 (1, format!("Parameter [{key_full}]"), value)
             }
             _ => {
-                log::debug!("getParam({params_str}) returns (-1, '{key_full}', 0)",);
+                log::debug!(
+                    "getParam[{params_str}] returns {}",
+                    format_return_value(
+                        -1,
+                        &format!("Parameter [{key_full}] is not set"),
+                        &Value::i4(0)
+                    )
+                );
                 (
                     -1,
                     format!("Parameter [{key_full}] is not set"),
@@ -939,7 +1010,7 @@ impl Handler for SearchParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("searchParam({params_str})");
+        log::debug!("searchParam[{params_str}]");
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
 
@@ -947,20 +1018,26 @@ impl Handler for SearchParamHandler {
             Ok(Some(res)) => {
                 let status = format!("Found [{}]", format_value(&res));
                 log::debug!(
-                    "searchParam({params_str}) returns (1, '{status}', {})",
-                    format_value(&res)
+                    "searchParam[{params_str}] returns {}",
+                    format_return_value(1, &status, &res)
                 );
                 Ok((1, status, res).try_to_value()?)
             }
             Ok(None) => {
                 let status = format!("Parameter [{params_str}] is not set");
-                log::debug!("searchParam({params_str}) returns (-1, '{status}', 0)");
-                Ok((-1, status, Value::i4(0)).try_to_value()?)
+                log::debug!(
+                    "searchParam[{params_str}] returns {}",
+                    format_return_value(-1, &status, &Value::string("".to_string()))
+                );
+                Ok((-1, status, Value::string("".to_string())).try_to_value()?)
             }
             Err(e) => {
                 let status = format!("Error: {e}");
-                log::debug!("searchParam({params_str}) returns (-1, '{status}', 0)");
-                Ok((-1, status, Value::i4(0)).try_to_value()?)
+                log::debug!(
+                    "searchParam[{params_str}] returns {}",
+                    format_return_value(-1, &status, &Value::string("".to_string()))
+                );
+                Ok((-1, status, Value::string("".to_string())).try_to_value()?)
             }
         }
     }
@@ -994,7 +1071,7 @@ impl Handler for SubscribeParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("subscribeParam({params_str})");
+        log::debug!("subscribeParam[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
@@ -1013,8 +1090,8 @@ impl Handler for SubscribeParamHandler {
         log::info!("+CACHEDPARAM [{}] by {}", key, caller_id);
         let status = format!("Subscribed to parameter [{}]", &key);
         log::debug!(
-            "subscribeParam({params_str}) returns (1, '{status}', {})",
-            format_value(&value)
+            "subscribeParam[{params_str}] returns {}",
+            format_return_value(1, &status, &value)
         );
         let response = (1, status, value).try_to_value()?;
         Ok(response)
@@ -1049,7 +1126,7 @@ impl Handler for UnSubscribeParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("unsubscribeParam({params_str})");
+        log::debug!("unsubscribeParam[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
         let key = resolve(&caller_id, &key);
@@ -1067,7 +1144,10 @@ impl Handler for UnSubscribeParamHandler {
             "".to_string()
         };
         let response = (1, status, if removed { 1 } else { 0 });
-        log::debug!("unsubscribeParam({params_str}) returns {response:?}");
+        log::debug!(
+            "unsubscribeParam[{params_str}] returns {}",
+            format_return_value(response.0, &response.1, &Value::i4(response.2))
+        );
         Ok(response.try_to_value()?)
     }
 }
@@ -1110,7 +1190,7 @@ impl Handler for HasParamHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("hasParam({params_str})");
+        log::debug!("hasParam[{params_str}]");
 
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
@@ -1121,7 +1201,10 @@ impl Handler for HasParamHandler {
             .contains(&key)
             .map_err(|e| DxrError::invalid_data(e))?;
         let response = (1, key, has);
-        log::debug!("hasParam({params_str}) returns {response:?}");
+        log::debug!(
+            "hasParam[{params_str}] returns {}",
+            format_return_value(response.0, &response.1, &Value::boolean(response.2))
+        );
         Ok(response.try_to_value()?)
     }
 }
@@ -1151,7 +1234,7 @@ impl Handler for GetParamNamesHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("getParamNames({params_str})");
+        log::debug!("getParamNames[{params_str}]");
         let a = <(String, String)>::try_from_params(params);
         let b = <(String,)>::try_from_params(params);
 
@@ -1160,8 +1243,15 @@ impl Handler for GetParamNamesHandler {
         }
 
         let keys: Vec<String> = self.data.parameters.get_keys();
-        let response = (1, "Parameter names", keys);
-        log::debug!("getParamNames({params_str}) returns {response:?}");
+        let response = (1, "Parameter names".to_string(), keys.clone());
+        log::debug!(
+            "getParamNames[{params_str}] returns {}",
+            format_return_value(
+                response.0,
+                response.1.as_str(),
+                &response.2.try_to_value().unwrap()
+            )
+        );
         Ok(response.try_to_value()?)
     }
 }
@@ -1192,9 +1282,12 @@ impl Handler for DebugOutputHandler {
             .map(|v| format_value(v))
             .collect::<Vec<_>>()
             .join(", ");
-        log::debug!("system.multicall({params_str})");
+        log::debug!("system.multicall[{params_str}]");
         let response = (1, "", "");
-        log::debug!("system.multicall({params_str}) returns {response:?}");
+        log::debug!(
+            "system.multicall[{params_str}] returns {}",
+            format_return_value(response.0, response.1, &response.2.try_to_value().unwrap())
+        );
         Ok(response.try_to_value()?)
     }
 }

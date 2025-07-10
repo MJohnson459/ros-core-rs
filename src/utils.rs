@@ -1,10 +1,11 @@
 use dxr::{TryFromValue, Value};
+use serde_json;
 
-/// Formats a `Value` object in a human-readable way for logging purposes.
+/// Formats a `Value` object as valid JSON for logging purposes.
 ///
-/// This function attempts to convert the `Value` to various known types and
-/// formats them appropriately. Strings are quoted, numbers are displayed as-is,
-/// booleans are shown as true/false, and complex types are formatted clearly.
+/// This function converts the `Value` to valid JSON format, properly escaping
+/// special characters and using double quotes for strings. This makes the output
+/// much easier to parse reliably.
 ///
 /// # Arguments
 ///
@@ -12,63 +13,86 @@ use dxr::{TryFromValue, Value};
 ///
 /// # Returns
 ///
-/// A formatted string representation of the value
+/// A JSON-formatted string representation of the value
 pub fn format_value(value: &Value) -> String {
+    // Convert the Value to serde_json::Value first, then serialize to JSON
+    match value_to_serde_json(value) {
+        Ok(json_value) => {
+            serde_json::to_string(&json_value).unwrap_or_else(|_| format!("{:?}", value))
+        }
+        Err(_) => format!("{:?}", value),
+    }
+}
+
+/// Converts a dxr::Value to serde_json::Value for JSON serialization
+fn value_to_serde_json(value: &Value) -> Result<serde_json::Value, ()> {
     // Try to convert to various types in order of preference
 
     // Try string first
     if let Ok(s) = String::try_from_value(value) {
-        return format!("'{}'", s.replace(['\n', '\r'], ""));
+        return Ok(serde_json::Value::String(s));
     }
 
     // Try boolean
     if let Ok(b) = bool::try_from_value(value) {
-        return b.to_string();
+        return Ok(serde_json::Value::Bool(b));
     }
 
     // Try i32
     if let Ok(i) = i32::try_from_value(value) {
-        return i.to_string();
+        return Ok(serde_json::Value::Number(serde_json::Number::from(i)));
     }
 
     // Try i64 (only if the i8 feature is enabled)
     #[cfg(feature = "i8")]
     if let Ok(i) = i64::try_from_value(value) {
-        return i.to_string();
+        return Ok(serde_json::Value::Number(serde_json::Number::from(i)));
     }
 
     // Try f64
     if let Ok(f) = f64::try_from_value(value) {
-        return f.to_string();
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return Ok(serde_json::Value::Number(n));
+        }
     }
 
     // Try Vec<Value> (arrays)
     if let Ok(vec) = Vec::<Value>::try_from_value(value) {
-        let formatted_elements: Vec<String> = vec.iter().map(format_value).collect();
-        return format!("[{}]", formatted_elements.join(", "));
+        let mut json_array = Vec::new();
+        for v in vec {
+            if let Ok(json_val) = value_to_serde_json(&v) {
+                json_array.push(json_val);
+            }
+        }
+        return Ok(serde_json::Value::Array(json_array));
     }
 
     // Try HashMap<String, Value> (structs/objects)
     if let Ok(map) = std::collections::HashMap::<String, Value>::try_from_value(value) {
-        let formatted_pairs: Vec<String> = map
-            .iter()
-            .map(|(k, v)| format!("'{}': {}", k, format_value(v)))
-            .collect();
-        return format!("{{{}}}", formatted_pairs.join(", "));
+        let mut json_object = serde_json::Map::new();
+        for (k, v) in map {
+            if let Ok(json_val) = value_to_serde_json(&v) {
+                json_object.insert(k, json_val);
+            }
+        }
+        return Ok(serde_json::Value::Object(json_object));
     }
 
     // Try Vec<u8> (base64)
     if let Ok(bytes) = Vec::<u8>::try_from_value(value) {
-        return format!("<base64: {} bytes>", bytes.len());
+        return Ok(serde_json::Value::String(format!(
+            "<base64: {} bytes>",
+            bytes.len()
+        )));
     }
 
     // Try chrono::NaiveDateTime
     if let Ok(dt) = chrono::NaiveDateTime::try_from_value(value) {
-        return format!("<datetime: {}>", dt);
+        return Ok(serde_json::Value::String(format!("<datetime: {}>", dt)));
     }
 
-    // If all else fails, use the Debug implementation
-    format!("{:?}", value)
+    // If all else fails, return null
+    Err(())
 }
 
 /// Formats a slice of `Value` objects as a comma-separated string using `format_value`.
@@ -85,7 +109,47 @@ pub fn format_params(params: &[Value]) -> String {
         .iter()
         .map(format_value)
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(",")
+}
+
+/// Formats a topic list for debug output in JSON format.
+///
+/// This function takes a vector of (topic_name, topic_type) tuples and formats them
+/// as JSON arrays for better log parsing.
+///
+/// # Arguments
+///
+/// * `topics` - Vector of (String, String) tuples representing (topic_name, topic_type)
+///
+/// # Returns
+///
+/// A JSON-formatted string representation of the topics
+pub fn format_topic_list(topics: &[(String, String)]) -> String {
+    let topic_arrays: Vec<String> = topics
+        .iter()
+        .map(|(name, topic_type)| format!("[\"{}\", \"{}\"]", name, topic_type))
+        .collect();
+    format!("[{}]", topic_arrays.join(", "))
+}
+
+/// Formats a return value tuple for debug output in valid JSON format.
+///
+/// This function takes a tuple of (status, message, value) and formats it
+/// as a JSON array for better log parsing.
+///
+/// # Arguments
+///
+/// * `status` - Integer status code
+/// * `message` - String message
+/// * `value` - The return value (can be any type)
+///
+/// # Returns
+///
+/// A JSON-formatted string representation of the return value as an array
+pub fn format_return_value(status: i32, message: &str, value: &Value) -> String {
+    let value_json = format_value(value);
+    let message_json = serde_json::to_string(message).unwrap();
+    format!("[{}, {}, {}]", status, message_json, value_json)
 }
 
 #[cfg(test)]
@@ -137,7 +201,7 @@ mod tests {
         .try_to_value()
         .unwrap();
 
-        assert_eq!(format_value(&value), "[\"hello\", 42, true]");
+        assert_eq!(format_value(&value), "[\"hello\",42,true]");
     }
 
     #[test]
@@ -152,9 +216,9 @@ mod tests {
 
         // Note: HashMap iteration order is not guaranteed, so we need to be flexible
         let formatted = format_value(&value);
-        assert!(formatted.contains("name: \"test\""));
-        assert!(formatted.contains("count: 42"));
-        assert!(formatted.contains("active: true"));
+        assert!(formatted.contains("\"name\":\"test\""));
+        assert!(formatted.contains("\"count\":42"));
+        assert!(formatted.contains("\"active\":true"));
         assert!(formatted.starts_with("{"));
         assert!(formatted.ends_with("}"));
     }
@@ -176,10 +240,10 @@ mod tests {
         .unwrap();
 
         let formatted = format_value(&value);
-        assert!(formatted.contains("user: {"));
-        assert!(formatted.contains("name: \"alice\""));
-        assert!(formatted.contains("scores: [95, 87, 92]"));
-        assert!(formatted.contains("active: true"));
+        assert!(formatted.contains("\"user\":{"));
+        assert!(formatted.contains("\"name\":\"alice\""));
+        assert!(formatted.contains("\"scores\":[95,87,92]"));
+        assert!(formatted.contains("\"active\":true"));
     }
 
     #[test]
@@ -189,7 +253,7 @@ mod tests {
             Value::i4(42),
             Value::boolean(false),
         ];
-        assert_eq!(format_params(&params), "\"foo\", 42, false");
+        assert_eq!(format_params(&params), "\"foo\",42,false");
     }
 
     #[test]
@@ -204,6 +268,21 @@ mod tests {
         .try_to_value()
         .unwrap();
 
-        assert_eq!(format_value(&value), "[\"/ln_rst_test_node\", \"/rosout\", \"rosgraph_msgs/Log\", \"http://LOCLAP858:41145/\"]");
+        assert_eq!(
+            format_value(&value),
+            "[\"/ln_rst_test_node\",\"/rosout\",\"rosgraph_msgs/Log\",\"http://LOCLAP858:41145/\"]"
+        );
+    }
+
+    #[test]
+    fn test_escaped_strings() {
+        let value = Value::string("hello \"world\" with quotes".to_string());
+        assert_eq!(format_value(&value), "\"hello \\\"world\\\" with quotes\"");
+    }
+
+    #[test]
+    fn test_newlines_in_strings() {
+        let value = Value::string("hello\nworld".to_string());
+        assert_eq!(format_value(&value), "\"hello\\nworld\"");
     }
 }

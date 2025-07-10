@@ -112,7 +112,7 @@ impl ComparisonResult {
         self.log_errors += 1;
     }
 
-    fn print(&self) {
+    fn print(&self, ignore_messages: bool) {
         println!("\n=== Replay Results ===");
         println!("Total Requests: {}", self.total_requests);
         println!();
@@ -145,11 +145,13 @@ impl ComparisonResult {
                 if let Some(actual_value) = &mismatch.actual_value {
                     println!("    Actual Value: {}", format_value(actual_value));
                 }
-                if let Some(expected_msg) = &mismatch.expected_message {
-                    println!("    Expected Message: {}", expected_msg);
-                }
-                if let Some(actual_msg) = &mismatch.actual_message {
-                    println!("    Actual Message: {}", actual_msg);
+                if !ignore_messages {
+                    if let Some(expected_msg) = &mismatch.expected_message {
+                        println!("    Expected Message: {}", expected_msg);
+                    }
+                    if let Some(actual_msg) = &mismatch.actual_message {
+                        println!("    Actual Message: {}", actual_msg);
+                    }
                 }
                 if let Some(target_err) = &mismatch.target_error {
                     println!("    Target Error: {}", target_err);
@@ -949,7 +951,7 @@ async fn main() -> anyhow::Result<()> {
     .await;
 
     // Print results
-    result.print();
+    result.print(args.ignore_messages);
 
     // Exit with error code if there are mismatches
     if result.mismatching_results > 0 {

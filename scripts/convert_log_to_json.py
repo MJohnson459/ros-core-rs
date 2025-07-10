@@ -6,7 +6,6 @@ Parses log lines containing function calls and their return values,
 extracting timestamp, function name, arguments, status code, message, and value.
 """
 
-import ast
 import json
 import re
 import sys
@@ -20,12 +19,14 @@ stats: dict = {
     'returns_lines': 0,
     'regex_matches': 0,
     'parse_success': 0,
-    'parse_failures': 0,
+    'parse_failures': 0,  # lines with any error
+    'lines_skipped': 0,   # lines not converted at all
     'errors_by_type': {}
 }
 
 def log_error(error_type: str, line_num: int, line: str, details: str = ""):
     """Log detailed error information."""
+    global stats
     if error_type not in stats['errors_by_type']:
         stats['errors_by_type'][error_type] = []
 
@@ -35,6 +36,7 @@ def log_error(error_type: str, line_num: int, line: str, details: str = ""):
         'details': details
     }
     stats['errors_by_type'][error_type].append(error_info)
+    stats['parse_failures'] += 1  # Increment for any error
 
     print(f"ERROR [{error_type}] Line {line_num}: {details}", file=sys.stderr)
     if len(line.strip()) > 100:
@@ -50,12 +52,7 @@ def parse_timestamp(timestamp_str: str) -> str:
     except Exception as e:
         raise ValueError(f"Failed to parse timestamp '{timestamp_str}': {e}")
 
-def pyify_bools(s: str) -> str:
-    """Convert JSON-style booleans and nulls to Python equivalents."""
-    s = re.sub(r'\btrue\b', 'True', s, flags=re.IGNORECASE)
-    s = re.sub(r'\bfalse\b', 'False', s, flags=re.IGNORECASE)
-    s = re.sub(r'\bnull\b', 'None', s, flags=re.IGNORECASE)
-    return s
+
 
 def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, list, str, int, str, Any]]:
     """Extract function call and response data from a log line."""
@@ -68,92 +65,90 @@ def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, l
     # right: '(status, "message", value)'
 
     # Extract timestamp and function call
-    left_pattern = r'\[([^\]]+)\s+DEBUG\s+ros_core_rs::core\]\s+([^(]+)\((.*)\)'
-    left_match = re.match(left_pattern, left)
+    left_pattern_brackets = r'\[([^\]]+)\s+DEBUG\s+ros_core_rs::core\]\s+([^\[]+)\[(.*)\]'
+    left_pattern_parens = r'\[([^\]]+)\s+DEBUG\s+ros_core_rs::core\]\s+([^(]+)\((.*)\)'
+    left_match = re.match(left_pattern_brackets, left)
+    if not left_match:
+        left_match = re.match(left_pattern_parens, left)
     if not left_match:
         log_error("left_parse_failed", line_num, line, "Failed to parse left part")
         return None
     timestamp, function_name, args_str = left_match.groups()
 
-    # Parse arguments
+    # Map of function names to expected argument counts
+    FUNCTION_ARG_COUNTS = {
+        'setParam': 3,
+        'getParam': 2,
+        'subscribeParam': 3,
+        'registerPublisher': 4,
+        'registerSubscriber': 4,
+        'registerService': 4,
+        'unregisterPublisher': 3,
+        'unregisterSubscriber': 3,
+        'unregisterService': 3,
+        'deleteParam': 2,
+        'hasParam': 2,
+        'searchParam': 2,
+        'getParamNames': 1,
+        'getPublishedTopics': 2,
+        'getSystemState': 1,
+        'getPid': 1,
+        # Add more as needed
+    }
+
+    # Parse arguments as JSON array if possible
     args = []
     if args_str.strip():
         try:
-            parsed_args = ast.literal_eval(pyify_bools(args_str))
-            if isinstance(parsed_args, (list, tuple)):
-                args = list(parsed_args)
+            # If already bracketed, parse directly
+            if args_str.strip().startswith('[') and args_str.strip().endswith(']'):
+                args = json.loads(args_str.strip())
             else:
-                args = [parsed_args]
+                # Fallback: wrap in brackets and try
+                args = json.loads(f'[{args_str.strip()}]')
         except Exception as e:
-            log_error("args_parse_failed", line_num, line, f"Failed to parse arguments '{args_str}': {e}")
-            args = [args_str.strip()] if args_str.strip() else []
-
-    # Parse response tuple: (status, "message", value)
-    right = right.strip()
-    if right.startswith('(') and right.endswith(')'):
-        right = right[1:-1]
-
-    def find_split_points(s):
-        """Find the first two commas outside quotes/brackets."""
-        splits = []
-        paren_count = 0
-        bracket_count = 0
-        in_quotes = False
-        quote_char = None
-        for i, char in enumerate(s):
-            if char in ['"', "'"]:
-                if not in_quotes:
-                    in_quotes = True
-                    quote_char = char
-                elif char == quote_char:
-                    in_quotes = False
-                    quote_char = None
-            elif not in_quotes:
-                if char == '(':
-                    paren_count += 1
-                elif char == ')':
-                    paren_count -= 1
-                elif char == '[':
-                    bracket_count += 1
-                elif char == ']':
-                    bracket_count -= 1
-                elif char == ',' and paren_count == 0 and bracket_count == 0:
-                    splits.append(i)
-                    if len(splits) == 2:
-                        break
-        return splits
-
-    splits = find_split_points(right)
-    if len(splits) >= 2:
-        status_part = right[:splits[0]].strip()
-        message_part = right[splits[0]+1:splits[1]].strip()
-        value_part = right[splits[1]+1:].strip()
-
-        # Parse status
-        try:
-            status_code = int(status_part)
-        except Exception as e:
-            log_error("status_parse_failed", line_num, line, f"Failed to parse status '{status_part}': {e}")
-            status_code = -999
-
-        # Parse message
-        message = message_part.strip('"\'')
-
-        # Parse value
-        value_part_stripped = value_part.strip()
-        if value_part_stripped.startswith("'<?xml") or value_part_stripped.startswith('"<?xml'):
-            # XML content - preserve as string
-            value = value_part_stripped.strip('"\'')
-        else:
-            try:
-                # Try to parse as Python literal (dict, list, bool, number, etc.)
-                value = ast.literal_eval(pyify_bools(value_part_stripped))
-            except Exception as e:
-                # If parsing fails, treat as string
-                value = value_part_stripped.strip('"\'')
-                log_error("value_parse_failed", line_num, line, f"Failed to parse value '{value_part_stripped}', treating as string: {e}")
+            log_error("args_parse_failed", line_num, line, f"Failed to parse arguments as JSON array: {e}")
+            args = [args_str.strip('"\'')]
     else:
-        log_error("response_parse_failed", line_num, line, "Could not split response into status, message, value")
+        args = []
+
+        # Parse response array: [status, "message", value]
+    right = right.strip()
+
+    # Handle both bracket and parenthesis formats
+    if right.startswith('[') and right.endswith(']'):
+        response_array_str = right
+    elif right.startswith('(') and right.endswith(')'):
+        # Legacy format with parentheses - convert to brackets
+        response_array_str = '[' + right[1:-1] + ']'
+    else:
+        log_error("response_format_failed", line_num, line, f"Response is not in expected format: {right}")
+        return None
+
+
+
+    try:
+        # Parse the entire response as a JSON array
+        response_array = json.loads(response_array_str)
+
+        if not isinstance(response_array, list) or len(response_array) < 3:
+            log_error("response_array_invalid", line_num, line, f"Response array must have at least 3 elements: {response_array}")
+            return None
+
+        status_code = response_array[0]
+        message = response_array[1]
+        value = response_array[2]
+
+        # Ensure status_code is an integer
+        if not isinstance(status_code, int):
+            try:
+                status_code = int(status_code)
+            except (ValueError, TypeError) as e:
+                log_error("status_parse_failed", line_num, line, f"Failed to parse status '{status_code}': {e}")
+                status_code = -999
+
+    except json.JSONDecodeError as e:
+        log_error("response_json_parse_failed", line_num, line, f"Failed to parse response as JSON: {e}")
         return None
 
     # Parse timestamp to correct format
@@ -176,6 +171,7 @@ def convert_log_lines_to_jsonl(lines: List[str]) -> List[dict]:
         'regex_matches': 0,
         'parse_success': 0,
         'parse_failures': 0,
+        'lines_skipped': 0,
         'errors_by_type': {}
     }
 
@@ -209,7 +205,7 @@ def convert_log_lines_to_jsonl(lines: List[str]) -> List[dict]:
                     results.append(json_entry)
                     stats['parse_success'] += 1
                 else:
-                    stats['parse_failures'] += 1
+                    stats['lines_skipped'] += 1  # Only increment for total parse failure
     return results
 
 def convert_log_to_json(input_file: str, output_file: str, debug_file: Optional[str] = None):
@@ -228,16 +224,19 @@ def convert_log_to_json(input_file: str, output_file: str, debug_file: Optional[
     print(f"DEBUG lines: {stats['debug_lines']}")
     print(f"Lines with 'returns': {stats['returns_lines']}")
     print(f"Successfully parsed: {stats['parse_success']}")
-    print(f"Failed to parse: {stats['parse_failures']}")
+    print(f"Failed to parse (any error): {stats['parse_failures']}")
+    print(f"Lines skipped (not converted): {stats['lines_skipped']}")
 
     if stats['errors_by_type']:
         print(f"\n=== ERROR BREAKDOWN ===")
         for error_type, errors in stats['errors_by_type'].items():
             print(f"{error_type}: {len(errors)} errors")
-            for i, error in enumerate(errors[:3]):
-                print(f"  Example {i+1} (Line {error['line_num']}): {error['details']}")
-            if len(errors) > 3:
-                print(f"  ... and {len(errors) - 3} more")
+            for i, error in enumerate(errors):
+                print(f"  Line {error['line_num']}: {error['details']}")
+                if len(error['line']) > 100:
+                    print(f"    {error['line'][:100]}...")
+                else:
+                    print(f"    {error['line']}")
 
     print(f"\nProcessed {len(results)} responses")
     print(f"Failed to parse {stats['parse_failures']} lines")

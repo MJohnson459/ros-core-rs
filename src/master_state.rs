@@ -269,6 +269,8 @@ impl MasterState {
         }
     }
 
+    /// Returns a list of topics that are published in the given subgraph and
+    /// their types.
     pub fn get_published_topics(&self, subgraph: &str) -> Vec<(String, String)> {
         let mut result = Vec::<(String, String)>::new();
         for topic in self.publications.iter() {
@@ -284,6 +286,7 @@ impl MasterState {
         result
     }
 
+    /// Returns a list of topics and their types.
     pub fn get_topic_types(&self) -> Vec<(String, String)> {
         self.topics
             .iter()
