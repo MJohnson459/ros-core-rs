@@ -696,19 +696,19 @@ mod tests {
             .search("pr2/foo", "robot_description")
             .unwrap()
             .unwrap();
-        assert_eq!(res, Value::string("pr2/robot_description".to_owned()));
+        assert_eq!(res, Value::string("/pr2/robot_description".to_owned()));
 
         let res = tree
             .search("pr2/foo", "robot_description/arm")
             .unwrap()
             .unwrap();
-        assert_eq!(res, Value::string("pr2/robot_description/arm".to_owned()));
+        assert_eq!(res, Value::string("/pr2/robot_description/arm".to_owned()));
 
         let res = tree
             .search("pr2/foo", "robot_description/base")
             .unwrap()
             .unwrap();
-        assert_eq!(res, Value::string("pr2/robot_description/base".to_owned()));
+        assert_eq!(res, Value::string("/pr2/robot_description/base".to_owned()));
     }
 
     #[test]
