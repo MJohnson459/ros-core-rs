@@ -17,12 +17,18 @@ stats: dict = {
     'total_lines': 0,
     'debug_lines': 0,
     'returns_lines': 0,
-    'regex_matches': 0,
     'parse_success': 0,
     'parse_failures': 0,  # lines with any error
     'lines_skipped': 0,   # lines not converted at all
     'errors_by_type': {}
 }
+
+def format_line_preview(line: str, max_length: int = 100) -> str:
+    """Format a line for error reporting with length limit."""
+    line = line.strip()
+    if len(line) > max_length:
+        return f"{line[:max_length]}..."
+    return line
 
 def log_error(error_type: str, line_num: int, line: str, details: str = ""):
     """Log detailed error information."""
@@ -39,10 +45,7 @@ def log_error(error_type: str, line_num: int, line: str, details: str = ""):
     stats['parse_failures'] += 1  # Increment for any error
 
     print(f"ERROR [{error_type}] Line {line_num}: {details}", file=sys.stderr)
-    if len(line.strip()) > 100:
-        print(f"  Line preview: {line.strip()[:100]}...", file=sys.stderr)
-    else:
-        print(f"  Full line: {line.strip()}", file=sys.stderr)
+    print(f"  {format_line_preview(line)}", file=sys.stderr)
 
 def parse_timestamp(timestamp_str: str) -> str:
     """Parse timestamp and convert to ISO format."""
@@ -52,51 +55,24 @@ def parse_timestamp(timestamp_str: str) -> str:
     except Exception as e:
         raise ValueError(f"Failed to parse timestamp '{timestamp_str}': {e}")
 
-
-
-def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, list, str, int, str, Any]]:
-    """Extract function call and response data from a log line."""
-    if ' returns ' not in line:
-        log_error("no_returns", line_num, line, "Line does not contain ' returns '")
-        return None
-
-    left, _, right = line.partition(' returns ')
-    # left: '[timestamp DEBUG ros_core_rs::core] functionName(args)'
-    # right: '(status, "message", value)'
-
+def parse_left_side(left: str, line_num: int, line: str) -> Optional[Tuple[str, str, str]]:
+    """Parse the left side of a log line to extract timestamp, function name, and arguments."""
     # Extract timestamp and function call
     left_pattern_brackets = r'\[([^\]]+)\s+DEBUG\s+ros_core_rs::core\]\s+([^\[]+)\[(.*)\]'
     left_pattern_parens = r'\[([^\]]+)\s+DEBUG\s+ros_core_rs::core\]\s+([^(]+)\((.*)\)'
+
     left_match = re.match(left_pattern_brackets, left)
     if not left_match:
         left_match = re.match(left_pattern_parens, left)
     if not left_match:
         log_error("left_parse_failed", line_num, line, "Failed to parse left part")
         return None
+
     timestamp, function_name, args_str = left_match.groups()
+    return timestamp, function_name, args_str
 
-    # Map of function names to expected argument counts
-    FUNCTION_ARG_COUNTS = {
-        'setParam': 3,
-        'getParam': 2,
-        'subscribeParam': 3,
-        'registerPublisher': 4,
-        'registerSubscriber': 4,
-        'registerService': 4,
-        'unregisterPublisher': 3,
-        'unregisterSubscriber': 3,
-        'unregisterService': 3,
-        'deleteParam': 2,
-        'hasParam': 2,
-        'searchParam': 2,
-        'getParamNames': 1,
-        'getPublishedTopics': 2,
-        'getSystemState': 1,
-        'getPid': 1,
-        # Add more as needed
-    }
-
-    # Parse arguments as JSON array if possible
+def parse_arguments(args_str: str, line_num: int, line: str) -> List[Any]:
+    """Parse function arguments from string to list."""
     args = []
     if args_str.strip():
         try:
@@ -109,10 +85,10 @@ def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, l
         except Exception as e:
             log_error("args_parse_failed", line_num, line, f"Failed to parse arguments as JSON array: {e}")
             args = [args_str.strip('"\'')]
-    else:
-        args = []
+    return args
 
-        # Parse response array: [status, "message", value]
+def parse_response_array(right: str, line_num: int, line: str) -> Optional[Tuple[int, str, Any]]:
+    """Parse the response array from the right side of a log line."""
     right = right.strip()
 
     # Handle both bracket and parenthesis formats
@@ -124,8 +100,6 @@ def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, l
     else:
         log_error("response_format_failed", line_num, line, f"Response is not in expected format: {right}")
         return None
-
-
 
     try:
         # Parse the entire response as a JSON array
@@ -147,9 +121,56 @@ def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, l
                 log_error("status_parse_failed", line_num, line, f"Failed to parse status '{status_code}': {e}")
                 status_code = -999
 
+        return status_code, message, value
+
     except json.JSONDecodeError as e:
         log_error("response_json_parse_failed", line_num, line, f"Failed to parse response as JSON: {e}")
         return None
+
+def create_json_entry(function_name: str, args: List[Any], timestamp: str,
+                     status_code: int, message: str, value: Any) -> dict:
+    """Create a JSON entry from parsed log data."""
+    if isinstance(args, tuple):
+        args = list(args)
+
+    return {
+        "request": {
+            "timestamp": timestamp,
+            "function": function_name,
+            "arguments": args
+        },
+        "response": {
+            "timestamp": timestamp,
+            "status_code": status_code if status_code is not None else -999,
+            "message": message if message is not None else "PARSE_ERROR",
+            "value": value
+        }
+    }
+
+def extract_function_response(line: str, line_num: int) -> Optional[Tuple[str, list, str, int, str, Any]]:
+    """Extract function call and response data from a log line."""
+    if ' returns ' not in line:
+        log_error("no_returns", line_num, line, "Line does not contain ' returns '")
+        return None
+
+    left, _, right = line.partition(' returns ')
+    # left: '[timestamp DEBUG ros_core_rs::core] functionName(args)'
+    # right: '(status, "message", value)'
+
+    # Parse left side
+    left_result = parse_left_side(left, line_num, line)
+    if not left_result:
+        return None
+    timestamp, function_name, args_str = left_result
+
+    # Parse arguments
+    args = parse_arguments(args_str, line_num, line)
+
+    # Parse response array
+    response_result = parse_response_array(right, line_num, line)
+    if not response_result:
+        return None
+    status_code, message, value = response_result
 
     # Parse timestamp to correct format
     try:
@@ -168,7 +189,6 @@ def convert_log_lines_to_jsonl(lines: List[str]) -> List[dict]:
         'total_lines': 0,
         'debug_lines': 0,
         'returns_lines': 0,
-        'regex_matches': 0,
         'parse_success': 0,
         'parse_failures': 0,
         'lines_skipped': 0,
@@ -187,26 +207,43 @@ def convert_log_lines_to_jsonl(lines: List[str]) -> List[dict]:
                 response_data = extract_function_response(line, line_num)
                 if response_data:
                     function_name, args, timestamp, status_code, message, value = response_data
-                    if isinstance(args, tuple):
-                        args = list(args)
-                    json_entry = {
-                        "request": {
-                            "timestamp": timestamp,
-                            "function": function_name,
-                            "arguments": args
-                        },
-                        "response": {
-                            "timestamp": timestamp,
-                            "status_code": status_code if status_code is not None else -999,
-                            "message": message if message is not None else "PARSE_ERROR",
-                            "value": value
-                        }
-                    }
+                    json_entry = create_json_entry(function_name, args, timestamp, status_code, message, value)
                     results.append(json_entry)
                     stats['parse_success'] += 1
                 else:
                     stats['lines_skipped'] += 1  # Only increment for total parse failure
     return results
+
+def print_statistics():
+    """Print conversion statistics."""
+    print("\n=== CONVERSION STATISTICS ===")
+    print(f"Total lines processed: {stats['total_lines']}")
+    print(f"DEBUG lines: {stats['debug_lines']}")
+    print(f"Lines with 'returns': {stats['returns_lines']}")
+    print(f"Successfully parsed: {stats['parse_success']}")
+    print(f"Failed to parse (any error): {stats['parse_failures']}")
+    print(f"Lines skipped (not converted): {stats['lines_skipped']}")
+
+def print_error_breakdown():
+    """Print detailed error breakdown."""
+    if stats['errors_by_type']:
+        print("\n=== ERROR BREAKDOWN ===")
+        for error_type, errors in stats['errors_by_type'].items():
+            print(f"{error_type}: {len(errors)} errors")
+            for error in errors:
+                print(f"  Line {error['line_num']}: {error['details']}")
+                print(f"    {format_line_preview(error['line'])}")
+
+def write_debug_report(debug_file: str):
+    """Write detailed error report to debug file."""
+    with open(debug_file, 'w') as f_debug:
+        f_debug.write("=== DETAILED ERROR REPORT ===\n")
+        for error_type, errors in stats['errors_by_type'].items():
+            f_debug.write(f"\n{error_type.upper()} ({len(errors)} errors):\n")
+            for error in errors:
+                f_debug.write(f"Line {error['line_num']}: {error['details']}\n")
+                f_debug.write(f"  {error['line']}\n\n")
+    print(f"Detailed error report written to: {debug_file}")
 
 def convert_log_to_json(input_file: str, output_file: str, debug_file: Optional[str] = None):
     """Convert the log file to JSON lines format."""
@@ -219,40 +256,16 @@ def convert_log_to_json(input_file: str, output_file: str, debug_file: Optional[
         for entry in results:
             f_out.write(json.dumps(entry) + '\n')
 
-    print(f"\n=== CONVERSION STATISTICS ===")
-    print(f"Total lines processed: {stats['total_lines']}")
-    print(f"DEBUG lines: {stats['debug_lines']}")
-    print(f"Lines with 'returns': {stats['returns_lines']}")
-    print(f"Successfully parsed: {stats['parse_success']}")
-    print(f"Failed to parse (any error): {stats['parse_failures']}")
-    print(f"Lines skipped (not converted): {stats['lines_skipped']}")
-
-    if stats['errors_by_type']:
-        print(f"\n=== ERROR BREAKDOWN ===")
-        for error_type, errors in stats['errors_by_type'].items():
-            print(f"{error_type}: {len(errors)} errors")
-            for i, error in enumerate(errors):
-                print(f"  Line {error['line_num']}: {error['details']}")
-                if len(error['line']) > 100:
-                    print(f"    {error['line'][:100]}...")
-                else:
-                    print(f"    {error['line']}")
+    print_statistics()
+    print_error_breakdown()
 
     print(f"\nProcessed {len(results)} responses")
     print(f"Failed to parse {stats['parse_failures']} lines")
 
     if debug_file:
-        with open(debug_file, 'w') as f_debug:
-            f_debug.write("=== DETAILED ERROR REPORT ===\n")
-            for error_type, errors in stats['errors_by_type'].items():
-                f_debug.write(f"\n{error_type.upper()} ({len(errors)} errors):\n")
-                for error in errors:
-                    f_debug.write(f"Line {error['line_num']}: {error['details']}\n")
-                    f_debug.write(f"  {error['line']}\n\n")
-        print(f"Detailed error report written to: {debug_file}")
+        write_debug_report(debug_file)
 
 if __name__ == "__main__":
-    import ast
     if len(sys.argv) < 3 or len(sys.argv) > 4:
         print("Usage: python3 convert_log_to_json.py <input.log> <output.jsonl> [debug_report.txt]")
         sys.exit(1)
