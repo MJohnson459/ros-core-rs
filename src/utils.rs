@@ -43,12 +43,6 @@ fn value_to_serde_json(value: &Value) -> Result<serde_json::Value, ()> {
         return Ok(serde_json::Value::Number(serde_json::Number::from(i)));
     }
 
-    // Try i64 (only if the i8 feature is enabled)
-    #[cfg(feature = "i8")]
-    if let Ok(i) = i64::try_from_value(value) {
-        return Ok(serde_json::Value::Number(serde_json::Number::from(i)));
-    }
-
     // Try f64
     if let Ok(f) = f64::try_from_value(value) {
         if let Some(n) = serde_json::Number::from_f64(f) {

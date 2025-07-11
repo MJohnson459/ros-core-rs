@@ -14,9 +14,9 @@ use dxr::{DxrError, TryFromParams, TryFromValue, TryToValue, Value};
 
 use crate::{
     master_state::MasterState,
-    utils::{format_params, format_return_value, format_value},
+    param_tree::ParamTree,
+    utils::{format_return_value, format_value},
 };
-use crate::{param_tree::ParamTree, utils::format_topic_list};
 
 /// An enum that represents the different types of endpoints that can be accessed in the ROS Master API.
 ///
@@ -212,7 +212,7 @@ impl Handler for UnRegisterServiceHandler {
         log::debug!("unregisterService[{params_str}]");
 
         type Request = (String, String, String);
-        let (caller_id, service, _service_api) = Request::try_from_params(params)?;
+        let (caller_id, service, service_api) = Request::try_from_params(params)?;
 
         // Check for empty service parameter
         if service.trim().is_empty() {
@@ -235,7 +235,7 @@ impl Handler for UnRegisterServiceHandler {
         let removed = self
             .data
             .master_state
-            .unregister_service(&caller_id, &service);
+            .unregister_service(&caller_id, &service, &service_api);
 
         let status = if removed {
             format!("Unregistered [{caller_id}] as provider of [{service}]")
@@ -349,7 +349,7 @@ impl Handler for UnRegisterSubscriberHandler {
             .join(", ");
         log::debug!("unregisterSubscriber[{params_str}]");
         type Request = (String, String, String);
-        let (caller_id, topic, _caller_api) = Request::try_from_params(params)?;
+        let (caller_id, topic, caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
@@ -361,7 +361,7 @@ impl Handler for UnRegisterSubscriberHandler {
         let removed = self
             .data
             .master_state
-            .unregister_subscriber(&caller_id, &topic);
+            .unregister_subscriber(&caller_id, &topic, &caller_api);
 
         let status = format!("Unregistered [{caller_id}] as provider of [{topic}]");
         let result = (1, status, if removed { 1 } else { 0 });
@@ -469,8 +469,7 @@ impl Handler for UnRegisterPublisherHandler {
             .join(", ");
         log::debug!("unregisterPublisher[{params_str}]");
         type Request = (String, String, String);
-        // TODO(mj): We don't use the caller_api parameter, but we probably should?
-        let (caller_id, topic, _caller_api) = Request::try_from_params(params)?;
+        let (caller_id, topic, caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
@@ -482,7 +481,7 @@ impl Handler for UnRegisterPublisherHandler {
         let removed = self
             .data
             .master_state
-            .unregister_publisher(&caller_id, &topic);
+            .unregister_publisher(&caller_id, &topic, &caller_api);
 
         let result = match removed {
             Ok(true) => (
@@ -588,9 +587,12 @@ impl Handler for GetPublishedTopicsHandler {
             .join(", ");
         log::debug!("getPublishedTopics[{params_str}]");
         type Request = (String, String);
-        let (_caller_id, subgraph) = Request::try_from_params(params)?;
+        let (caller_id, subgraph) = Request::try_from_params(params)?;
 
-        let topics = self.data.master_state.get_published_topics(&subgraph);
+        let topics = self
+            .data
+            .master_state
+            .get_published_topics(&caller_id, &subgraph);
         log::debug!(
             "getPublishedTopics[{params_str}] returns {}",
             format_return_value(1, "current topics", &topics.try_to_value().unwrap())
@@ -1301,41 +1303,6 @@ macro_rules! make_handlers {
             .build();
         router
     }};
-}
-
-fn get_node_id() -> Option<[u8; 6]> {
-    let ip_link = std::process::Command::new("ip")
-        .arg("link")
-        .output()
-        .ok()?
-        .stdout;
-    let ip_link = String::from_utf8_lossy(&ip_link);
-    let mut next_is_mac = false;
-    let mut mac = None;
-    for element in ip_link.split_whitespace() {
-        if next_is_mac {
-            mac = Some(element);
-            break;
-        }
-        if element == "link/ether" {
-            next_is_mac = true;
-        }
-    }
-    let mac = mac?;
-    let mut all_ok = true;
-    let mac: Vec<u8> = mac
-        .split(':')
-        .filter_map(|hex| {
-            let res = u8::from_str_radix(hex, 16);
-            all_ok &= res.is_ok();
-            res.ok()
-        })
-        .collect();
-    if !all_ok {
-        return None;
-    }
-    let mac: [u8; 6] = mac.try_into().ok()?;
-    Some(mac)
 }
 
 impl Master {
