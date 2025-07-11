@@ -1,3 +1,74 @@
+//! ROS Master Log Replay Tool
+//!
+//! This tool replays recorded ROS Master API calls from a JSONL log file against a target ROS Master
+//! to validate compatibility and performance.
+//!
+//! ## Usage
+//!
+//! ```bash
+//! # Basic usage - replay all requests from log file
+//! cargo run --bin replay_log -- output.jsonl
+//!
+//! # Specify custom target URI
+//! cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
+//!
+//! # Filter by function name
+//! cargo run --bin replay_log -- --function-filter getParam output.jsonl
+//!
+//! # Limit number of requests to replay
+//! cargo run --bin replay_log -- --max-requests 100 output.jsonl
+//! ```
+//!
+//! ## Log File Format
+//!
+//! The tool expects a JSONL (JSON Lines) file where each line contains a JSON object:
+//!
+//! ```json
+//! {
+//!   "request": {
+//!     "timestamp": "2024-01-01T12:00:00Z",
+//!     "function": "getParam",
+//!     "arguments": ["/test_node", "/test_param"]
+//!   },
+//!   "response": {
+//!     "timestamp": "2024-01-01T12:00:00Z",
+//!     "status_code": 1,
+//!     "message": "Parameter found",
+//!     "value": "test_value",
+//!     "function": "getParam"
+//!   }
+//! }
+//! ```
+//!
+//! ## Testing Strategy
+//!
+//! 1. **Generate Log File**: Start your ROS Master with debug logging:
+//!    ```bash
+//!    RUST_LOG=debug cargo run --release --bin ros-core-rs |& tee output.log
+//!    ```
+//!
+//! 2. **Convert Log to JSONL**: Convert the debug log to JSONL format:
+//!    ```bash
+//!    python3 scripts/convert_log_to_json.py output.log output.jsonl
+//!    ```
+//!
+//! 3. **Replay Against Reference**: Replay the log against the reference ROS Master:
+//!    ```bash
+//!    rosmaster
+//!    cargo run --bin replay_log -- output.jsonl
+//!    ```
+//!
+//! 4. **Replay Against Your Implementation**: Replay the same log against your implementation:
+//!    ```bash
+//!    cargo run --release --bin ros-core-rs
+//!    cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
+//!    ```
+//!
+//! ## Exit Codes
+//!
+//! - `0`: All tests passed (results match)
+//! - `1`: One or more tests failed (results don't match)
+
 use clap::Parser;
 use dxr::{TryFromValue, TryToValue, Value};
 use ros_core_rs::core::MasterClient;
@@ -7,91 +78,209 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use url::Url;
 
+/// Represents a single log entry with request and response data
 #[derive(Debug, Serialize, Deserialize)]
 struct LogEntry {
+    /// Optional request data (may be None for response-only entries)
     request: Option<RequestData>,
+    /// Response data from the original request
     response: ResponseData,
 }
 
+/// Request data from the original API call
 #[derive(Debug, Serialize, Deserialize)]
 struct RequestData {
+    /// Timestamp when the request was made
     timestamp: String,
+    /// Function name (e.g., "getParam", "setParam", "registerPublisher")
     function: String,
+    /// Function arguments as JSON values
     arguments: Vec<serde_json::Value>,
 }
 
+/// Response data from the original API call
 #[derive(Debug, Serialize, Deserialize)]
 struct ResponseData {
+    /// Timestamp when the response was received
     timestamp: String,
+    /// HTTP status code (1 = success, 0 = failure)
     status_code: Option<i32>,
+    /// Response message (e.g., "Parameter found", "Parameter not found")
     message: Option<String>,
+    /// Response value (can be any JSON type)
     value: Option<serde_json::Value>,
+    /// Function name (should match request function)
     function: Option<String>,
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    name = "replay_log",
+    author,
+    version,
+    about = "Replay recorded ROS Master API calls from a JSONL log file against a target ROS Master",
+    long_about = r#"
+ROS Master Log Replay Tool
+
+This tool replays recorded ROS Master API calls from a JSONL log file against a target ROS Master
+to validate compatibility and performance.
+
+EXAMPLES:
+  # Basic usage - replay all requests from log file
+  cargo run --bin replay_log -- output.jsonl
+
+  # Specify custom target URI
+  cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
+
+  # Filter by function name
+  cargo run --bin replay_log -- --function-filter getParam output.jsonl
+
+  # Limit number of requests to replay
+  cargo run --bin replay_log -- --max-requests 100 output.jsonl
+
+  # Suppress detailed output
+  cargo run --bin replay_log -- --quiet output.jsonl
+
+  # Continue testing even if results don't match
+  cargo run --bin replay_log -- --continue output.jsonl
+
+  # Compare message differences in addition to status and value
+  cargo run --bin replay_log -- --compare-messages output.jsonl
+
+LOG FILE FORMAT:
+  The tool expects a JSONL (JSON Lines) file where each line contains a JSON object:
+  {
+    "request": {
+      "timestamp": "2024-01-01T12:00:00Z",
+      "function": "getParam",
+      "arguments": ["/test_node", "/test_param"]
+    },
+    "response": {
+      "timestamp": "2024-01-01T12:00:00Z",
+      "status_code": 1,
+      "message": "Parameter found",
+      "value": "test_value",
+      "function": "getParam"
+    }
+  }
+
+TESTING STRATEGY:
+  1. Generate log file: RUST_LOG=debug cargo run --release --bin ros-core-rs |& tee output.log
+  2. Convert to JSONL: python3 scripts/convert_log_to_json.py output.log output.jsonl
+  3. Replay against reference: rosmaster && cargo run --bin replay_log -- output.jsonl
+  4. Replay against your implementation: cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
+
+EXIT CODES:
+  0 - All tests passed (results match)
+  1 - One or more tests failed (results don't match)
+"#
+)]
 struct Args {
-    /// JSONL log file to replay
+    /// JSONL log file to replay (required)
+    ///
+    /// The file should contain one JSON object per line with request and response data.
+    /// Use the convert_log_to_json.py script to generate this file from debug logs.
     input_file: String,
 
     /// ROS Master URI to test against
+    ///
+    /// The URI of the ROS Master to replay requests against.
+    /// Defaults to the standard ROS Master port.
     #[arg(short, long, default_value = "http://localhost:11311")]
     target_uri: String,
 
     /// Suppress detailed output for each test case
+    ///
+    /// By default, the tool shows detailed progress for each request.
+    /// Use this flag to suppress verbose output and only show summary results.
     #[arg(short, long)]
     quiet: bool,
 
     /// Continue testing even if results don't match
+    ///
+    /// By default, the tool stops at the first mismatch.
+    /// Use this flag to continue processing all requests and show all mismatches.
     #[arg(short, long)]
     continue_: bool,
 
     /// Maximum number of requests to replay (0 = all)
+    ///
+    /// Limit the number of requests to replay for quick testing.
+    /// Set to 0 (default) to replay all requests in the log file.
     #[arg(short, long, default_value = "0")]
     max_requests: usize,
 
     /// Filter by function name (e.g., "getParam")
+    ///
+    /// Only replay requests for the specified function.
+    /// Useful for testing specific API endpoints.
+    /// Examples: "getParam", "setParam", "registerPublisher", "registerSubscriber"
     #[arg(short, long)]
     function_filter: Option<String>,
 
     /// Compare message differences in addition to status and value
+    ///
+    /// By default, the tool only compares status codes and return values.
+    /// Use this flag to also compare response messages for more detailed validation.
     #[arg(short = 'g', long)]
     compare_messages: bool,
 }
 
+/// Results of replaying a log file against a target ROS Master
 #[derive(Debug)]
 struct ComparisonResult {
+    /// Total number of requests processed
     total_requests: usize,
+    /// Number of requests where results matched expected values
     matching_results: usize,
+    /// Number of requests where results didn't match expected values
     mismatching_results: usize,
+    /// Number of requests that failed on the target ROS Master
     target_errors: usize,
+    /// Number of log entries that couldn't be parsed
     log_errors: usize,
+    /// Detailed information about mismatches
     mismatches: Vec<Mismatch>,
+    /// Performance timing data
     profiling: ProfilingData,
 }
 
+/// Details about a single mismatch between expected and actual results
 #[derive(Debug)]
 struct Mismatch {
+    /// Line number in the log file where the mismatch occurred
     line_number: usize,
+    /// Function name that was called
     function: String,
+    /// Expected status code from the log
     expected_status: Option<i32>,
+    /// Actual status code from the target ROS Master
     actual_status: Option<i32>,
+    /// Expected message from the log
     expected_message: Option<String>,
+    /// Actual message from the target ROS Master
     actual_message: Option<String>,
+    /// Expected value from the log
     expected_value: Option<Value>,
+    /// Actual value from the target ROS Master
     actual_value: Option<Value>,
+    /// Error message if the target ROS Master call failed
     target_error: Option<String>,
 }
 
+/// Performance timing data for function calls
 #[derive(Debug)]
 struct ProfilingData {
+    /// Timing data for each function (function name -> list of call durations)
     function_times: HashMap<String, Vec<Duration>>,
+    /// Total execution time
     total_time: Duration,
+    /// When the profiling started
     start_time: Instant,
 }
 
 impl ProfilingData {
+    /// Create a new profiling data structure
     fn new() -> Self {
         Self {
             function_times: HashMap::new(),
@@ -100,6 +289,7 @@ impl ProfilingData {
         }
     }
 
+    /// Record the duration of a function call for performance analysis
     fn record_call(&mut self, function: &str, duration: Duration) {
         self.function_times
             .entry(function.to_string())
@@ -107,10 +297,12 @@ impl ProfilingData {
             .push(duration);
     }
 
+    /// Finalize the profiling data by calculating total execution time
     fn finish(&mut self) {
         self.total_time = self.start_time.elapsed();
     }
 
+    /// Print a detailed performance summary showing timing for each function
     fn print_summary(&self) {
         println!("\n=== Performance Summary ===");
         println!("Total execution time: {:?}", self.total_time);
@@ -149,6 +341,7 @@ impl ProfilingData {
 }
 
 impl ComparisonResult {
+    /// Create a new comparison result with empty statistics
     fn new() -> Self {
         Self {
             total_requests: 0,
@@ -161,19 +354,23 @@ impl ComparisonResult {
         }
     }
 
+    /// Record a successful match between expected and actual results
     fn add_match(&mut self) {
         self.matching_results += 1;
     }
 
+    /// Record a mismatch between expected and actual results
     fn add_mismatch(&mut self, mismatch: Mismatch) {
         self.mismatching_results += 1;
         self.mismatches.push(mismatch);
     }
 
+    /// Record an error from the target ROS Master
     fn add_target_error(&mut self) {
         self.target_errors += 1;
     }
 
+    /// Record an error parsing the log file
     fn add_log_error(&mut self) {
         self.log_errors += 1;
     }
@@ -292,6 +489,18 @@ impl ComparisonResult {
 }
 
 /// Compare two values and return detailed difference information
+///
+/// This function provides detailed analysis of differences between expected and actual values.
+/// It handles arrays, objects, and simple values with specific formatting for debugging.
+///
+/// # Arguments
+///
+/// * `expected` - The expected value from the log file
+/// * `actual` - The actual value from the target ROS Master
+///
+/// # Returns
+///
+/// A formatted string describing the differences between the values
 fn compare_values_detailed(expected: &Value, actual: &Value) -> String {
     let expected_str = format_value(expected);
     let actual_str = format_value(actual);
@@ -420,6 +629,17 @@ fn compare_values_detailed(expected: &Value, actual: &Value) -> String {
 }
 
 /// Convert a JSON value to the appropriate dxr::Value type
+///
+/// This function handles the conversion from serde_json::Value to dxr::Value,
+/// which is used internally by the ROS Master client.
+///
+/// # Arguments
+///
+/// * `json_value` - The JSON value to convert
+///
+/// # Returns
+///
+/// The converted dxr::Value
 fn json_to_value(json_value: &serde_json::Value) -> Value {
     match json_value {
         serde_json::Value::Null => Value::string("null".to_string()),
@@ -452,6 +672,17 @@ fn json_to_value(json_value: &serde_json::Value) -> Value {
 }
 
 /// Sort an array of arrays (like getPublishedTopics result) by the first element of each sub-array
+///
+/// This function is used for consistent comparison of array results that may be returned
+/// in different orders by different ROS Master implementations.
+///
+/// # Arguments
+///
+/// * `value` - The array value to sort
+///
+/// # Returns
+///
+/// A new Value with the array elements sorted
 fn sort_array_of_arrays(value: &Value) -> Value {
     if let Ok(arr) = Vec::<Value>::try_from_value(value) {
         let mut sorted_values: Vec<Value> = arr;
@@ -469,6 +700,17 @@ fn sort_array_of_arrays(value: &Value) -> Value {
 }
 
 /// Sort a simple array (like registerPublisher result) by string values
+///
+/// This function is used for consistent comparison of simple array results that may be returned
+/// in different orders by different ROS Master implementations.
+///
+/// # Arguments
+///
+/// * `value` - The array value to sort
+///
+/// # Returns
+///
+/// A new Value with the array elements sorted
 fn sort_simple_array(value: &Value) -> Value {
     if let Ok(arr) = Vec::<Value>::try_from_value(value) {
         let mut sorted_values: Vec<Value> = arr;
@@ -486,6 +728,17 @@ fn sort_simple_array(value: &Value) -> Value {
 }
 
 /// Sort dictionary keys for consistent comparison
+///
+/// This function is used for consistent comparison of dictionary results that may have
+/// keys in different orders by different ROS Master implementations.
+///
+/// # Arguments
+///
+/// * `value` - The dictionary value to sort
+///
+/// # Returns
+///
+/// A new Value with the dictionary keys sorted
 fn sort_dict_keys(value: &Value) -> Value {
     if let Ok(map) = HashMap::<String, Value>::try_from_value(value) {
         let mut sorted_map = HashMap::new();
@@ -911,6 +1164,26 @@ async fn call_function(
     result
 }
 
+/// Replay a JSONL log file against a target ROS Master
+///
+/// This function reads a JSONL log file line by line, parses each line as a JSON object
+/// containing request and response data, and replays the requests against the target
+/// ROS Master. It compares the results and provides detailed statistics.
+///
+/// # Arguments
+///
+/// * `client` - The ROS Master client to use for making requests
+/// * `input_file` - Path to the JSONL log file to replay
+/// * `target_uri` - URI of the target ROS Master (for display purposes)
+/// * `verbose` - Whether to show detailed progress for each request
+/// * `continue_on_mismatch` - Whether to continue processing after finding a mismatch
+/// * `max_requests` - Maximum number of requests to process (0 = all)
+/// * `function_filter` - Optional function name to filter requests
+/// * `ignore_messages` - Whether to ignore message differences in comparison
+///
+/// # Returns
+///
+/// A ComparisonResult containing statistics and mismatch details
 async fn replay_log(
     client: &MasterClient,
     input_file: &str,
@@ -1040,6 +1313,13 @@ async fn replay_log(
 }
 
 #[tokio::main]
+/// Main entry point for the ROS Master log replay tool
+///
+/// This function:
+/// 1. Parses command line arguments
+/// 2. Creates a ROS Master client
+/// 3. Replays the log file against the target ROS Master
+/// 4. Prints results and exits with appropriate code
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
