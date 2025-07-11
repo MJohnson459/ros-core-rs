@@ -8,8 +8,8 @@ use crate::client_api::ClientApi;
 /// Struct containing information about ROS data.
 #[derive(Default, Debug)]
 pub struct MasterState {
-    /// A map of service names to the set of nodes that provide that service.
-    service_list: DashMap<String, DashMap<String, String>>,
+    /// A map of service names to the (node_id, api_url) of the node that provide that service.
+    service_list: DashMap<String, (String, String)>,
     /// A map of node names to the API URL of the node.
     nodes: DashMap<String, String>,
     /// A map of topic names to the type of the topic.
@@ -55,38 +55,33 @@ impl MasterState {
         service_api: &str,
         caller_api: &str,
     ) {
+        log::error!("Registering service {caller_id} {service} {service_api} {caller_api}");
         self.register_node(&caller_id, &caller_api);
+
+        // If the service already exists, remove the old provider
+        // self.unregister_service(caller_id, service, service_api);
+
+        let service = resolve(&caller_id, &service);
         self.service_list
-            .entry(service.to_string())
-            .or_default()
-            .insert(caller_id.to_string(), service_api.to_string());
+            .insert(service, (caller_id.to_string(), service_api.to_string()));
     }
 
     pub fn unregister_service(&self, caller_id: &str, service: &str, service_api: &str) -> bool {
+        log::error!("unregistering service {caller_id} {service} {service_api}");
         let service = resolve(&caller_id, &service);
 
-        // need to manually check service api matches
-
-        let removed = if let Some(providers) = self.service_list.get_mut(&service) {
+        let to_remove = if let Some(provider) = self.service_list.get_mut(&service) {
             // Check if service API matches and remove provider
-            let was_removed = providers
-                .get(caller_id)
-                .filter(|entry| entry.value() == service_api)
-                .and(providers.remove(caller_id))
-                .is_some();
-
-            // Remove empty service entry
-            if was_removed && providers.is_empty() {
-                drop(providers);
-                self.service_list.remove(&service);
-            }
-
-            was_removed
+            provider.value().0 == caller_id && provider.value().1 == service_api
         } else {
             false
         };
 
-        removed
+        if to_remove {
+            self.service_list.remove(&service);
+        }
+
+        to_remove
     }
 
     /// Returns a list of XMLRPC API URIs for nodes currently publishing the
@@ -354,12 +349,8 @@ impl MasterState {
             .service_list
             .iter()
             .map(|item| {
-                let mut node_names: Vec<_> = item
-                    .value()
-                    .iter()
-                    .map(|internal_item| internal_item.key().to_string())
-                    .collect::<Vec<String>>();
-                node_names.sort();
+                // Only one provider per service
+                let node_names = vec![item.value().0.to_string()];
 
                 (item.key().to_string(), node_names)
             })
@@ -367,14 +358,13 @@ impl MasterState {
         (publishers, subscribers, services)
     }
 
+    /// Returns the API URL of the node that provides the given service.
     pub fn lookup_service(&self, caller_id: &str, service: &str) -> Result<String, String> {
         let service = resolve(&caller_id, &service);
 
-        let services = self.service_list.get(&service).map(|s| s.clone());
-        if let Some(services) = services {
-            if let Some(entry) = services.iter().next() {
-                return Ok(entry.value().clone());
-            }
+        let service = self.service_list.get(&service).map(|s| s.clone());
+        if let Some(service) = service {
+            return Ok(service.1.clone());
         }
 
         Err("no provider".to_string())
@@ -403,10 +393,7 @@ impl MasterState {
         self.subscriptions.retain(|_, v| !v.is_empty());
 
         // Remove the node from any service it is in
-        self.service_list.iter_mut().for_each(|mut v| {
-            v.value_mut().retain(|k, _| k != caller_id);
-        });
-        self.service_list.retain(|_, v| !v.is_empty());
+        self.service_list.retain(|_, v| v.0 != caller_id);
     }
 }
 
@@ -450,19 +437,30 @@ mod tests {
     #[test]
     fn test_register_service() {
         let master_state = MasterState::default();
-        master_state.register_service("node_1", "service", "http://node_1", "http://node_1");
+        master_state.register_service("node_1", "service", "xmprpc://node_1", "http://node_1");
         assert_eq!(
             master_state.lookup_service("node_1", "service"),
-            Ok("http://node_1".to_string())
+            Ok("xmprpc://node_1".to_string())
+        );
+
+        master_state.register_service(
+            "/sim_001/locomotor",
+            "escape_recovery/set_parameters",
+            "xmprpc://node_1",
+            "http://node_1",
+        );
+        assert_eq!(
+            master_state.lookup_service("/sim_001/locomotor", "escape_recovery/set_parameters"),
+            Ok("xmprpc://node_1".to_string())
         );
     }
 
     #[test]
     fn test_unregister_service() {
         let master_state = MasterState::default();
-        master_state.register_service("node_1", "service", "http://node_1", "http://node_1");
+        master_state.register_service("node_1", "service", "xmprpc://node_1", "http://node_1");
         assert_eq!(
-            master_state.unregister_service("node_1", "service", "http://node_1"),
+            master_state.unregister_service("node_1", "service", "xmprpc://node_1"),
             true
         );
     }
