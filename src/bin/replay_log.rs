@@ -411,8 +411,7 @@ impl ComparisonResult {
                 {
                     // Always show the detailed comparison for better debugging
                     println!("    Detailed comparison:");
-                    let mut diff_info = String::new();
-                    diff_info = compare_values_detailed(expected_value, actual_value);
+                    let diff_info = compare_values_detailed(expected_value, actual_value);
                     for line in diff_info.lines() {
                         println!("      {}", line);
                     }
@@ -451,10 +450,125 @@ impl ComparisonResult {
     }
 }
 
+/// Format a value with truncation for better debugging
+///
+/// This function formats values but truncates large arrays and objects to make
+/// debugging easier by showing only the first few elements.
+/// It recursively handles nested structures.
+///
+/// # Arguments
+///
+/// * `value` - The value to format
+/// * `max_items` - Maximum number of items to show in arrays/objects
+/// * `max_length` - Maximum string length before truncation
+/// * `depth` - Current nesting depth (used internally for recursion)
+///
+/// # Returns
+///
+/// A formatted string with truncation
+fn format_value_truncated(
+    value: &Value,
+    max_items: usize,
+    max_length: usize,
+    depth: usize,
+) -> String {
+    let full_str = format_value(value);
+
+    // If we're too deep or the string is short enough, return as is
+    if depth > 3 || full_str.len() <= max_length {
+        if full_str.len() > max_length {
+            return format!("{}...", &full_str[..max_length - 3]);
+        }
+        return full_str;
+    }
+
+    // For arrays, try to show first few items
+    if let Ok(arr) = Vec::<Value>::try_from_value(value) {
+        if arr.len() <= max_items {
+            // Even for small arrays, truncate individual items if they're too long
+            let mut truncated = String::new();
+            truncated.push('[');
+
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    truncated.push_str(", ");
+                }
+                let item_str = format_value_truncated(item, max_items, 100, depth + 1);
+                truncated.push_str(&item_str);
+            }
+
+            truncated.push(']');
+            return truncated;
+        }
+
+        let mut truncated = String::new();
+        truncated.push('[');
+
+        for (i, item) in arr.iter().take(max_items).enumerate() {
+            if i > 0 {
+                truncated.push_str(", ");
+            }
+            let item_str = format_value_truncated(item, max_items, 100, depth + 1);
+            truncated.push_str(&item_str);
+        }
+
+        truncated.push_str(&format!(", ... ({} more items)]", arr.len() - max_items));
+        return truncated;
+    }
+
+    // For objects/dictionaries
+    if let Ok(map) = HashMap::<String, Value>::try_from_value(value) {
+        if map.len() <= max_items {
+            let mut truncated = String::new();
+            truncated.push('{');
+
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort();
+
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    truncated.push_str(", ");
+                }
+                let val_str =
+                    format_value_truncated(map.get(*key).unwrap(), max_items, 50, depth + 1);
+                truncated.push_str(&format!("\"{}\": {}", key, val_str));
+            }
+
+            truncated.push('}');
+            return truncated;
+        }
+
+        let mut truncated = String::new();
+        truncated.push('{');
+
+        let mut keys: Vec<_> = map.keys().collect();
+        keys.sort();
+
+        for (i, key) in keys.iter().take(max_items).enumerate() {
+            if i > 0 {
+                truncated.push_str(", ");
+            }
+            let val_str = format_value_truncated(map.get(*key).unwrap(), max_items, 50, depth + 1);
+            truncated.push_str(&format!("\"{}\": {}", key, val_str));
+        }
+
+        truncated.push_str(&format!(", ... ({} more keys)}}", map.len() - max_items));
+        return truncated;
+    }
+
+    // For other types, just truncate the string
+    if full_str.len() > max_length {
+        format!("{}...", &full_str[..max_length - 3])
+    } else {
+        full_str
+    }
+}
+
 /// Compare two values and return detailed difference information
 ///
 /// This function provides detailed analysis of differences between expected and actual values.
 /// It handles arrays, objects, and simple values with specific formatting for debugging.
+/// Large values are truncated to make differences easier to spot.
 ///
 /// # Arguments
 ///
@@ -468,8 +582,8 @@ fn compare_values_detailed(expected: &Value, actual: &Value) -> String {
     if value_eq(expected, actual) {
         return "Values are identical".to_string();
     } else {
-        let expected_str = format_value(expected);
-        let actual_str = format_value(actual);
+        let expected_str = format_value_truncated(expected, 5, 500, 0);
+        let actual_str = format_value_truncated(actual, 5, 500, 0);
 
         return format!("Expected: '{}'\nActual: '{}'", expected_str, actual_str);
     }
@@ -590,10 +704,10 @@ fn sort_array_of_arrays(value: &Value) -> Value {
     }
 }
 
-/// Sort an only the internal arrays of a value (like getSystemState result) by
-/// the first element of each sub-array
+/// Sort a getSystemState result which is an array of three arrays (publishers, subscribers, services)
+/// Each sub-array contains topic-tuple pairs that need to be sorted
 ///
-/// This function is used for consistent comparison of array results that may be returned
+/// This function is used for consistent comparison of getSystemState results that may be returned
 /// in different orders by different ROS Master implementations.
 ///
 /// # Arguments
@@ -604,15 +718,48 @@ fn sort_array_of_arrays(value: &Value) -> Value {
 ///
 /// A new Value with the array elements sorted
 fn sort_internal_arrays(value: &Value) -> Value {
-    if let Ok(mut arr) = Vec::<Vec<Value>>::try_from_value(value) {
-        for sub_arr in &mut arr {
-            sub_arr.sort_by(|a, b| {
-                let a_str = format_value(a);
-                let b_str = format_value(b);
-                a_str.cmp(&b_str)
-            });
+    // getSystemState returns: [publishers_array, subscribers_array, services_array]
+    if let Ok(mut outer_arr) = Vec::<Value>::try_from_value(value) {
+        // Process each of the three arrays (publishers, subscribers, services)
+        for sub_array_value in &mut outer_arr {
+            if let Ok(mut sub_arr) = Vec::<Vec<Value>>::try_from_value(sub_array_value) {
+                // Sort the publishers/subscribers/services within each topic tuple
+                for topic_tuple in &mut sub_arr {
+                    if topic_tuple.len() >= 2 {
+                        // The second element (index 1) should be an array of publishers/subscribers/services
+                        if let Ok(entities) = Vec::<Value>::try_from_value(&topic_tuple[1]) {
+                            let mut sorted_entities = entities;
+                            sorted_entities.sort_by(|a, b| {
+                                let a_str = format_value(a);
+                                let b_str = format_value(b);
+                                a_str.cmp(&b_str)
+                            });
+                            if let Ok(sorted_value) = sorted_entities.try_to_value() {
+                                topic_tuple[1] = sorted_value;
+                            }
+                        }
+                    }
+                }
+
+                // Sort the topic tuples by topic name (first element of each tuple)
+                sub_arr.sort_by(|a, b| {
+                    if a.len() > 0 && b.len() > 0 {
+                        let a_str = format_value(&a[0]);
+                        let b_str = format_value(&b[0]);
+                        a_str.cmp(&b_str)
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                });
+
+                // Update the sub-array value
+                if let Ok(sorted_sub_array) = sub_arr.try_to_value() {
+                    *sub_array_value = sorted_sub_array;
+                }
+            }
         }
-        arr.try_to_value().unwrap_or_else(|_| value.clone())
+
+        outer_arr.try_to_value().unwrap_or_else(|_| value.clone())
     } else {
         value.clone()
     }
@@ -731,7 +878,7 @@ fn sort_values(function: &str, expected: &mut Option<Value>, actual: &mut Option
                 *actual = sort_internal_arrays(actual);
             }
         }
-        "registerPublisher" | "registerSubscriber" | "getTopicTypes" => {
+        "registerPublisher" | "registerSubscriber" | "getTopicTypes" | "getParamNames" => {
             if let (Some(expected), Some(actual)) = (expected, actual) {
                 *expected = sort_simple_array(expected);
                 *actual = sort_simple_array(actual);
