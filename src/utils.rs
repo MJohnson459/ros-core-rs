@@ -1,5 +1,93 @@
-use dxr::{TryFromValue, Value};
+use std::{fmt::Display, marker::PhantomData};
+
+use dxr::{DxrError, TryFromValue, TryToValue, Value};
 use serde_json;
+
+/// A common response type for all ROSRPC methods.
+///
+/// # Fields
+///
+/// * `status` - The status code of the response
+/// * `message` - The message of the response
+/// * `value` - The value of the response
+pub struct CommonResponse<T: TryToValue + TryFromValue> {
+    pub status: i32,
+    pub message: String,
+    pub value: Value,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: TryToValue + TryFromValue> CommonResponse<T> {
+    pub fn new(status: i32, message: impl Into<String>, value: T) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            value: value.try_to_value().unwrap(),
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn to_common(self) -> CommonResponse<Value> {
+        CommonResponse::new(
+            self.status,
+            self.message,
+            self.value.try_to_value().unwrap(),
+        )
+    }
+
+    /// Formats a return value tuple for debug output in valid JSON format.
+    ///
+    /// This function takes a tuple of (status, message, value) and formats it
+    /// as a JSON array for better log parsing.
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - Integer status code
+    /// * `message` - String message
+    /// * `value` - The return value (can be any type)
+    ///
+    /// # Returns
+    ///
+    /// A JSON-formatted string representation of the return value as an array
+    pub fn format_return_value(&self) -> String {
+        let value_json = format_value(&self.value);
+        let message_json = serde_json::to_string(&self.message).unwrap();
+        format!("{}, {}, {}", self.status, message_json, value_json)
+    }
+}
+
+impl<T: TryToValue + TryFromValue> TryToValue for CommonResponse<T> {
+    fn try_to_value(&self) -> Result<Value, DxrError> {
+        Ok((
+            Value::i4(self.status),
+            Value::string(self.message.clone()),
+            self.value.try_to_value()?,
+        )
+            .try_to_value()?)
+    }
+}
+
+impl<T: TryToValue + TryFromValue> TryFromValue for CommonResponse<T> {
+    fn try_from_value(value: &Value) -> Result<Self, DxrError> {
+        let (status, message, value): (i32, String, T) = TryFromValue::try_from_value(value)?;
+        Ok(Self::new(status, message, value))
+    }
+}
+
+impl<T: TryToValue + TryFromValue> Display for CommonResponse<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.format_return_value())
+    }
+}
+
+pub fn param_to_string(params: &[Value]) -> String {
+    let params_str = params
+        .iter()
+        .map(|v| format_value(v))
+        .collect::<Vec<_>>()
+        .join(", ");
+    params_str
+}
 
 /// Formats a `Value` object as valid JSON for logging purposes.
 ///
@@ -124,26 +212,6 @@ pub fn format_topic_list(topics: &[(String, String)]) -> String {
         .map(|(name, topic_type)| format!("[\"{}\", \"{}\"]", name, topic_type))
         .collect();
     format!("[{}]", topic_arrays.join(", "))
-}
-
-/// Formats a return value tuple for debug output in valid JSON format.
-///
-/// This function takes a tuple of (status, message, value) and formats it
-/// as a JSON array for better log parsing.
-///
-/// # Arguments
-///
-/// * `status` - Integer status code
-/// * `message` - String message
-/// * `value` - The return value (can be any type)
-///
-/// # Returns
-///
-/// A JSON-formatted string representation of the return value as an array
-pub fn format_return_value(status: i32, message: &str, value: &Value) -> String {
-    let value_json = format_value(value);
-    let message_json = serde_json::to_string(message).unwrap();
-    format!("[{}, {}, {}]", status, message_json, value_json)
 }
 
 #[cfg(test)]

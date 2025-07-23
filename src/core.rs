@@ -15,7 +15,7 @@ use dxr::{DxrError, TryFromParams, TryFromValue, TryToValue, Value};
 use crate::{
     master_state::MasterState,
     param_tree::ParamTree,
-    utils::{format_return_value, format_value},
+    utils::{format_value, param_to_string, CommonResponse},
 };
 
 /// An enum that represents the different types of endpoints that can be accessed in the ROS Master API.
@@ -133,49 +133,48 @@ pub struct Master {
 struct RegisterServiceHandler {
     data: Arc<RosData>,
 }
-type RegisterServiceResponse = (i32, String, i32);
+type RegisterServiceResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for RegisterServiceHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "registerService", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("registerService[{params_str}]");
         type Request = (String, String, String, String);
         let (caller_id, service, service_api, caller_api) = Request::try_from_params(params)?;
 
         // Check for empty service parameter
         if service.trim().is_empty() {
-            let result = (
+            let result = RegisterServiceResponse::new(
                 -1,
                 "ERROR: parameter [service] must be a non-empty string",
                 0,
             );
-            log::debug!(
-                "registerService[{params_str}] returns {}",
-                format_return_value(
-                    -1,
-                    "ERROR: parameter [service] must be a non-empty string",
-                    &Value::i4(0)
-                )
-            );
+            log::debug!("registerService[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
         self.data
             .master_state
-            .register_service(&caller_id, &service, &service_api, &caller_api);
+            .register_node(&caller_id, &caller_api)
+            .await;
 
-        let status = format!("Registered [{caller_id}] as provider of [{service}]");
-        log::info!("+SERVICE [{}] {} {}", service, caller_id, caller_api);
-        log::debug!(
-            "registerService[{params_str}] returns {}",
-            format_return_value(1, &status, &Value::i4(1))
+        self.data
+            .master_state
+            .register_service(&caller_id, &service, &service_api);
+
+        let result = RegisterServiceResponse::new(
+            1,
+            format!("Registered [{caller_id}] as provider of [{service}]"),
+            1,
         );
+        log::info!("+SERVICE [{}] {} {}", service, caller_id, caller_api);
+        log::debug!("registerService[{params_str}] returns [{result}]");
 
-        Ok((1, status, 1).try_to_value()?)
+        Ok(result.try_to_value()?)
     }
 }
 
@@ -200,15 +199,15 @@ impl Handler for RegisterServiceHandler {
 struct UnRegisterServiceHandler {
     data: Arc<RosData>,
 }
-type UnRegisterServiceResponse = (i32, String, i32);
+type UnRegisterServiceResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for UnRegisterServiceHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "unregisterService", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("unregisterService[{params_str}]");
 
         type Request = (String, String, String);
@@ -216,19 +215,12 @@ impl Handler for UnRegisterServiceHandler {
 
         // Check for empty service parameter
         if service.trim().is_empty() {
-            let result = (
+            let result = UnRegisterServiceResponse::new(
                 -1,
                 "ERROR: parameter [service] must be a non-empty string",
                 0,
             );
-            log::debug!(
-                "unregisterService[{params_str}] returns {}",
-                format_return_value(
-                    -1,
-                    "ERROR: parameter [service] must be a non-empty string",
-                    &Value::i4(0)
-                )
-            );
+            log::debug!("unregisterService[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
@@ -242,11 +234,8 @@ impl Handler for UnRegisterServiceHandler {
         } else {
             format!("[{caller_id}] is not a registered node")
         };
-        let result = (1, status.clone(), if removed { 1 } else { 0 });
-        log::debug!(
-            "unregisterService[{params_str}] returns {}",
-            format_return_value(1, &status, &Value::i4(if removed { 1 } else { 0 }))
-        );
+        let result = UnRegisterServiceResponse::new(1, status.clone(), if removed { 1 } else { 0 });
+        log::debug!("unregisterService[{params_str}] returns [{result}]");
         Ok(result.try_to_value()?)
     }
 }
@@ -270,51 +259,45 @@ impl Handler for UnRegisterServiceHandler {
 struct RegisterSubscriberHandler {
     data: Arc<RosData>,
 }
-type RegisterSubscriberResponse = (i32, String, Vec<String>);
+type RegisterSubscriberResponse = CommonResponse<Vec<String>>;
 #[async_trait]
 impl Handler for RegisterSubscriberHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "registerSubscriber", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("registerSubscriber[{params_str}]");
         type Request = (String, String, String, String);
         let (caller_id, topic, topic_type, caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
-            let result = (
+            let result = RegisterSubscriberResponse::new(
                 -1,
                 "ERROR: parameter [topic] must be a non-empty string",
                 Vec::<String>::new(),
             );
-            log::debug!(
-                "registerSubscriber[{params_str}] returns {}",
-                format_return_value(
-                    -1,
-                    "ERROR: parameter [topic] must be a non-empty string",
-                    &Vec::<String>::new().try_to_value().unwrap()
-                )
-            );
+            log::debug!("registerSubscriber[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
-        let publisher_apis = self.data.master_state.register_subscriber(
-            &caller_id,
-            &topic,
-            &topic_type,
-            &caller_api,
-        );
+        self.data
+            .master_state
+            .register_node(&caller_id, &caller_api)
+            .await;
 
-        let status = format!("Subscribed to [{topic}]");
+        let publisher_apis =
+            self.data
+                .master_state
+                .register_subscriber(&caller_id, &topic, &topic_type);
+
+        let result =
+            RegisterSubscriberResponse::new(1, format!("Subscribed to [{topic}]"), publisher_apis);
         log::info!("+SUB [{}] {} {}", topic, caller_id, caller_api);
-        log::debug!(
-            "registerSubscriber[{params_str}] returns {}",
-            format_return_value(1, &status, &publisher_apis.try_to_value().unwrap())
-        );
-        return Ok((1, status, publisher_apis).try_to_value()?);
+        log::debug!("registerSubscriber[{params_str}] returns [{result}]");
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -338,23 +321,27 @@ impl Handler for RegisterSubscriberHandler {
 struct UnRegisterSubscriberHandler {
     data: Arc<RosData>,
 }
-type UnRegisterSubscriberResponse = (i32, String, i32);
+type UnRegisterSubscriberResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for UnRegisterSubscriberHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "unregisterSubscriber", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("unregisterSubscriber[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, topic, caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
-            let result = (-1, "ERROR: parameter [topic] must be a non-empty string", 0);
-            log::debug!("unregisterSubscriber[{params_str}] returns {result:?}");
+            let result = UnRegisterSubscriberResponse::new(
+                -1,
+                "ERROR: parameter [topic] must be a non-empty string",
+                0,
+            );
+            log::debug!("unregisterSubscriber[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
@@ -364,11 +351,8 @@ impl Handler for UnRegisterSubscriberHandler {
             .unregister_subscriber(&caller_id, &topic, &caller_api);
 
         let status = format!("Unregistered [{caller_id}] as provider of [{topic}]");
-        let result = (1, status, if removed { 1 } else { 0 });
-        log::debug!(
-            "unregisterSubscriber[{params_str}] returns {}",
-            format_return_value(result.0, &result.1, &Value::i4(result.2))
-        );
+        let result = UnRegisterSubscriberResponse::new(1, status, if removed { 1 } else { 0 });
+        log::debug!("unregisterSubscriber[{params_str}] returns [{result}]");
         Ok(result.try_to_value()?)
     }
 }
@@ -392,15 +376,15 @@ impl Handler for UnRegisterSubscriberHandler {
 struct RegisterPublisherHandler {
     data: Arc<RosData>,
 }
-type RegisterPublisherResponse = (i32, String, Vec<String>);
+type RegisterPublisherResponse = CommonResponse<Vec<String>>;
 #[async_trait]
 impl Handler for RegisterPublisherHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "registerPublisher", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("registerPublisher[{params_str}]");
         type Request = (String, String, String, String);
         let (caller_id, topic, topic_type, caller_api) = Request::try_from_params(params)?;
@@ -416,18 +400,24 @@ impl Handler for RegisterPublisherHandler {
             return Ok(result.try_to_value()?);
         }
 
+        self.data
+            .master_state
+            .register_node(&caller_id, &caller_api)
+            .await;
+
         let subscribers_api_urls =
             self.data
                 .master_state
-                .register_publisher(&caller_id, &topic, &topic_type, &caller_api);
+                .register_publisher(&caller_id, &topic, &topic_type);
 
         // Print early so the logs are in order.
-        let status = format!("Registered [{caller_id}] as publisher of [{topic}]");
-        log::info!("+PUB [{}] {} {}", topic, caller_id, caller_api);
-        log::debug!(
-            "registerPublisher[{params_str}] returns {}",
-            format_return_value(1, &status, &subscribers_api_urls.try_to_value().unwrap())
+        let result = RegisterPublisherResponse::new(
+            1,
+            format!("Registered [{caller_id}] as publisher of [{topic}]"),
+            subscribers_api_urls.clone(),
         );
+        log::info!("+PUB [{}] {} {}", topic, caller_id, caller_api);
+        log::debug!("registerPublisher[{params_str}] returns [{result}]");
 
         // TODO(mj): This should be done in a background task.
         self.data
@@ -435,7 +425,7 @@ impl Handler for RegisterPublisherHandler {
             .publisher_update(&caller_id, &topic, &subscribers_api_urls)
             .await;
 
-        return Ok((1, status, subscribers_api_urls).try_to_value()?);
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -458,23 +448,27 @@ impl Handler for RegisterPublisherHandler {
 struct UnRegisterPublisherHandler {
     data: Arc<RosData>,
 }
-type UnRegisterPublisherResponse = (i32, String, i32);
+type UnRegisterPublisherResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for UnRegisterPublisherHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "unregisterPublisher", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("unregisterPublisher[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, topic, caller_api) = Request::try_from_params(params)?;
 
         // Check for empty topic parameter
         if topic.trim().is_empty() {
-            let result = (-1, "ERROR: parameter [topic] must be a non-empty string", 0);
-            log::debug!("unregisterPublisher[{params_str}] returns {result:?}");
+            let result = UnRegisterPublisherResponse::new(
+                -1,
+                "ERROR: parameter [topic] must be a non-empty string",
+                0,
+            );
+            log::debug!("unregisterPublisher[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
@@ -484,19 +478,20 @@ impl Handler for UnRegisterPublisherHandler {
             .unregister_publisher(&caller_id, &topic, &caller_api);
 
         let result = match removed {
-            Ok(true) => (
+            Ok(true) => UnRegisterPublisherResponse::new(
                 1,
                 format!("Unregistered [{caller_id}] as provider of [{topic}]"),
                 1,
             ),
-            Ok(false) => (1, format!("[{caller_id}] is not a registered node"), 0),
-            Err(e) => (-1, e, 0),
+            Ok(false) => UnRegisterPublisherResponse::new(
+                1,
+                format!("[{caller_id}] is not a registered node"),
+                0,
+            ),
+            Err(e) => UnRegisterPublisherResponse::new(-1, e, 0),
         };
 
-        log::debug!(
-            "unregisterPublisher[{params_str}] returns {}",
-            format_return_value(result.0, &result.1, &Value::i4(result.2))
-        );
+        log::debug!("unregisterPublisher[{params_str}] returns [{result}]");
         Ok(result.try_to_value()?)
     }
 }
@@ -519,9 +514,13 @@ impl Handler for UnRegisterPublisherHandler {
 struct LookupNodeHandler {
     data: Arc<RosData>,
 }
-type LookupNodeResponse = (i32, String, String);
+type LookupNodeResponse = CommonResponse<String>;
 #[async_trait]
 impl Handler for LookupNodeHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "lookupNode", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
         let params_str = params
             .iter()
@@ -534,24 +533,24 @@ impl Handler for LookupNodeHandler {
 
         // Check for empty node parameter
         if node_name.trim().is_empty() {
-            let result = (-1, "ERROR: parameter [node] must be a non-empty string", "");
-            log::debug!("lookupNode[{params_str}] returns {result:?}");
+            let result = LookupNodeResponse::new(
+                -1,
+                "ERROR: parameter [node] must be a non-empty string",
+                String::new(),
+            );
+            log::debug!("lookupNode[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
         let node_api = self.data.master_state.lookup_node(&node_name);
 
         let result = if let Some(node_api) = node_api {
-            (1, String::new(), node_api)
+            LookupNodeResponse::new(1, String::new(), node_api)
         } else {
-            let err_msg = format!("unknown node [{}]", node_name);
-            (-1, err_msg, String::new())
+            LookupNodeResponse::new(-1, format!("unknown node [{}]", node_name), String::new())
         };
 
-        log::debug!(
-            "lookupNode[{params_str}] returns {}",
-            format_return_value(result.0, &result.1, &result.2.try_to_value().unwrap())
-        );
+        log::debug!("lookupNode[{params_str}] returns [{result}]");
         Ok(result.try_to_value()?)
     }
 }
@@ -576,15 +575,15 @@ impl Handler for LookupNodeHandler {
 struct GetPublishedTopicsHandler {
     data: Arc<RosData>,
 }
-type GetPublishedTopicsResponse = (i32, String, Vec<(String, String)>);
+type GetPublishedTopicsResponse = CommonResponse<Vec<(String, String)>>;
 #[async_trait]
 impl Handler for GetPublishedTopicsHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "getPublishedTopics", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("getPublishedTopics[{params_str}]");
         type Request = (String, String);
         let (caller_id, subgraph) = Request::try_from_params(params)?;
@@ -593,12 +592,9 @@ impl Handler for GetPublishedTopicsHandler {
             .data
             .master_state
             .get_published_topics(&caller_id, &subgraph);
-        log::debug!(
-            "getPublishedTopics[{params_str}] returns {}",
-            format_return_value(1, "current topics", &topics.try_to_value().unwrap())
-        );
-        let response = (1, "current topics", topics);
-        return Ok(response.try_to_value()?);
+        let result = GetPublishedTopicsResponse::new(1, "current topics", topics);
+        log::debug!("getPublishedTopics[{params_str}] returns [{result}]");
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -618,25 +614,22 @@ impl Handler for GetPublishedTopicsHandler {
 struct GetTopicTypesHandler {
     data: Arc<RosData>,
 }
-type GetTopicTypesResponse = (i32, String, Vec<(String, String)>);
+type GetTopicTypesResponse = CommonResponse<Vec<(String, String)>>;
 #[async_trait]
 impl Handler for GetTopicTypesHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "getTopicTypes", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("getTopicTypes[{params_str}]");
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
         let topics = self.data.master_state.get_topic_types();
-        log::debug!(
-            "getTopicTypes[{params_str}] returns {}",
-            format_return_value(1, "current system state", &topics.try_to_value().unwrap())
-        );
-        let response = (1, "current system state", topics);
-        return Ok(response.try_to_value()?);
+        let result = GetTopicTypesResponse::new(1, "current system state", topics);
+        log::debug!("getTopicTypes[{params_str}] returns [{result}]");
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -660,9 +653,17 @@ impl Handler for GetTopicTypesHandler {
 struct GetSystemStateHandler {
     data: Arc<RosData>,
 }
-type GetSystemStateResponse = (i32, String, Vec<(String, Vec<String>)>);
+type GetSystemStateResponse = CommonResponse<(
+    Vec<(String, Vec<String>)>,
+    Vec<(String, Vec<String>)>,
+    Vec<(String, Vec<String>)>,
+)>;
 #[async_trait]
 impl Handler for GetSystemStateHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "getSystemState", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
         let params_str = params
             .iter()
@@ -677,18 +678,13 @@ impl Handler for GetSystemStateHandler {
         let publishers_clone = publishers.clone();
         let subscribers_clone = subscribers.clone();
         let services_clone = services.clone();
-        let response = (1, "", (publishers, subscribers, services));
-        log::debug!(
-            "getSystemState[{params_str}] returns {}",
-            format_return_value(
-                1,
-                "",
-                &((publishers_clone, subscribers_clone, services_clone))
-                    .try_to_value()
-                    .unwrap()
-            )
+        let result = GetSystemStateResponse::new(
+            1,
+            "",
+            (publishers_clone, subscribers_clone, services_clone),
         );
-        return Ok(response.try_to_value()?);
+        log::debug!("getSystemState[{params_str}] returns [{result}]");
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -708,23 +704,17 @@ impl Handler for GetSystemStateHandler {
 struct GetUriHandler {
     data: Arc<RosData>,
 }
-type GetUriResponse = (i32, String, String);
+type GetUriResponse = CommonResponse<String>;
 #[async_trait]
 impl Handler for GetUriHandler {
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "getUri", skip_all))]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("getUri[{params_str}]");
 
-        let response = (1, "", self.data.uri.clone());
-        log::debug!(
-            "getUri[{params_str}] returns {}",
-            format_return_value(1, "", &self.data.uri.clone().try_to_value().unwrap())
-        );
-        return Ok(response.try_to_value()?);
+        let result = GetUriResponse::new(1, "", self.data.uri.clone());
+        log::debug!("getUri[{params_str}] returns [{result}]");
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -745,25 +735,19 @@ struct GetPidHandler {
     #[allow(unused)]
     data: Arc<RosData>,
 }
-type GetPidResponse = (i32, String, i32);
+type GetPidResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for GetPidHandler {
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "getPid", skip_all))]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("getPid[{params_str}]");
         type Request = String;
         let _caller_id = Request::try_from_params(params)?;
         let result = std::process::id() as i32; // max pid on linux is 2^22, so the typecast should have no unintended side effects
-        let response = (1, "", result);
-        log::debug!(
-            "getPid[{params_str}] returns {}",
-            format_return_value(1, "", &Value::i4(result))
-        );
-        return Ok(response.try_to_value()?);
+        let result = GetPidResponse::new(1, "", result);
+        log::debug!("getPid[{params_str}] returns [{result}]");
+        return Ok(result.try_to_value()?);
     }
 }
 
@@ -785,41 +769,38 @@ impl Handler for GetPidHandler {
 struct LookupServiceHandler {
     data: Arc<RosData>,
 }
-type LookupServiceResponse = (i32, String, String);
+type LookupServiceResponse = CommonResponse<String>;
 #[async_trait]
 impl Handler for LookupServiceHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "lookupService", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("lookupService[{params_str}]");
         type Request = (String, String);
         let (caller_id, service) = Request::try_from_params(params)?;
 
         // Check for empty service parameter
         if service.trim().is_empty() {
-            let result = (
+            let result = LookupServiceResponse::new(
                 -1,
                 "ERROR: parameter [service] must be a non-empty string".to_string(),
                 "".to_string(),
             );
-            log::debug!("lookupService({params_str}) returns {result:?}");
+            log::debug!("lookupService[{params_str}] returns [{result}]");
             return Ok(result.try_to_value()?);
         }
 
         let service_url = self.data.master_state.lookup_service(&caller_id, &service);
 
         let result = match service_url {
-            Ok(service_url) => (1, String::new(), service_url),
-            Err(e) => (-1, e, String::new()),
+            Ok(service_url) => LookupServiceResponse::new(1, String::new(), service_url),
+            Err(e) => LookupServiceResponse::new(-1, e, String::new()),
         };
 
-        log::debug!(
-            "lookupService[{params_str}] returns {}",
-            format_return_value(result.0, &result.1, &result.2.try_to_value().unwrap())
-        );
+        log::debug!("lookupService[{params_str}] returns [{result}]");
         return Ok(result.try_to_value()?);
     }
 }
@@ -842,15 +823,15 @@ impl Handler for LookupServiceHandler {
 struct DeleteParamHandler {
     data: Arc<RosData>,
 }
-type DeleteParamResponse = (i32, String, i32);
+type DeleteParamResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for DeleteParamHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "deleteParam", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("deleteParam[{params_str}]");
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
@@ -859,15 +840,12 @@ impl Handler for DeleteParamHandler {
 
         // Print early so the logs are in order.
         let result = if deleted {
-            (1, format!("parameter [{key}] deleted"), 0)
+            DeleteParamResponse::new(1, format!("parameter [{key}] deleted"), 0)
         } else {
-            (-1, format!("parameter [{key}] is not set"), 0)
+            DeleteParamResponse::new(-1, format!("parameter [{key}] is not set"), 0)
         };
 
-        log::debug!(
-            "deleteParam[{params_str}] returns {}",
-            format_return_value(result.0, &result.1, &Value::i4(result.2))
-        );
+        log::debug!("deleteParam[{params_str}] returns [{result}]");
 
         self.data
             .parameters
@@ -900,15 +878,12 @@ impl Handler for DeleteParamHandler {
 struct SetParamHandler {
     data: Arc<RosData>,
 }
-type SetParamResponse = (i32, String, i32);
+type SetParamResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for SetParamHandler {
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "setParam", skip_all))]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("setParam[{params_str}]");
         type Request = (String, String, Value);
         let (caller_id, key, value) = Request::try_from_params(params)?;
@@ -917,25 +892,22 @@ impl Handler for SetParamHandler {
         let status = self.data.parameters.set(&key, value);
 
         // Print early so the logs are in order.
-        let return_value = match status {
+        let result = match status {
             Ok(_) => {
                 log::info!("+PARAM [{key}] by {caller_id}");
-                (1, format!("parameter {key} set"), 0)
+                SetParamResponse::new(1, format!("parameter {key} set"), 0)
             }
-            Err(e) => (-1, format!("Error: {e}"), 0),
+            Err(e) => SetParamResponse::new(-1, format!("Error: {e}"), 0),
         };
 
-        log::debug!(
-            "setParam[{params_str}] returns {}",
-            format_return_value(return_value.0, &return_value.1, &Value::i4(return_value.2))
-        );
+        log::debug!("setParam[{params_str}] returns [{result}]");
 
         self.data
             .parameters
             .update_subscribers(&key, caller_id.clone())
             .await;
 
-        Ok(return_value.try_to_value()?)
+        Ok(result.try_to_value()?)
     }
 }
 
@@ -958,15 +930,12 @@ impl Handler for SetParamHandler {
 struct GetParamHandler {
     data: Arc<RosData>,
 }
-type GetParamResponse = (i32, String, Value);
+type GetParamResponse = CommonResponse<Value>;
 #[async_trait]
 impl Handler for GetParamHandler {
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "getParam", skip_all))]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("getParam[{params_str}]");
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
@@ -974,26 +943,18 @@ impl Handler for GetParamHandler {
 
         let response = match self.data.parameters.get(&key_full) {
             Ok(Some(value)) => {
-                log::debug!(
-                    "getParam[{params_str}] returns {}",
-                    format_return_value(1, &format!("Parameter [{key_full}]"), &value)
-                );
-                (1, format!("Parameter [{key_full}]"), value)
+                let response = GetParamResponse::new(1, format!("Parameter [{key_full}]"), value);
+                log::debug!("getParam[{params_str}] returns [{response}]");
+                response
             }
             _ => {
-                log::debug!(
-                    "getParam[{params_str}] returns {}",
-                    format_return_value(
-                        -1,
-                        &format!("Parameter [{key_full}] is not set"),
-                        &Value::i4(0)
-                    )
-                );
-                (
+                let response = GetParamResponse::new(
                     -1,
                     format!("Parameter [{key_full}] is not set"),
                     Value::i4(0),
-                )
+                );
+                log::debug!("getParam[{params_str}] returns [{response}]");
+                response
             }
         };
         Ok(response.try_to_value()?)
@@ -1003,45 +964,37 @@ impl Handler for GetParamHandler {
 struct SearchParamHandler {
     data: Arc<RosData>,
 }
-type SearchParamResponse = (i32, String, Value);
+type SearchParamResponse = CommonResponse<String>;
 #[async_trait]
 impl Handler for SearchParamHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "searchParam", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("searchParam[{params_str}]");
         type Request = (String, String);
         let (caller_id, key) = Request::try_from_params(params)?;
 
-        match self.data.parameters.search(&caller_id, &key) {
+        let response = match self.data.parameters.search(&caller_id, &key) {
             Ok(Some(res)) => {
-                let status = format!("Found [{}]", format_value(&res));
-                log::debug!(
-                    "searchParam[{params_str}] returns {}",
-                    format_return_value(1, &status, &res)
-                );
-                Ok((1, status, res).try_to_value()?)
+                let formatted_res = format_value(&res);
+                let status = format!("Found [{formatted_res}]");
+                SearchParamResponse::new(1, status, String::try_from_value(&res)?)
             }
             Ok(None) => {
                 let status = format!("Parameter [{params_str}] is not set");
-                log::debug!(
-                    "searchParam[{params_str}] returns {}",
-                    format_return_value(-1, &status, &Value::string("".to_string()))
-                );
-                Ok((-1, status, Value::string("".to_string())).try_to_value()?)
+                SearchParamResponse::new(-1, status, "".to_string())
             }
             Err(e) => {
                 let status = format!("Error: {e}");
-                log::debug!(
-                    "searchParam[{params_str}] returns {}",
-                    format_return_value(-1, &status, &Value::string("".to_string()))
-                );
-                Ok((-1, status, Value::string("".to_string())).try_to_value()?)
+                SearchParamResponse::new(-1, status, "".to_string())
             }
-        }
+        };
+
+        log::debug!("searchParam[{params_str}] returns [{response}]");
+        Ok(response.try_to_value()?)
     }
 }
 
@@ -1064,15 +1017,15 @@ impl Handler for SearchParamHandler {
 struct SubscribeParamHandler {
     data: Arc<RosData>,
 }
-type SubscribeParamResponse = (i32, String, Value);
+type SubscribeParamResponse = CommonResponse<Value>;
 #[async_trait]
 impl Handler for SubscribeParamHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "subscribeParam", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("subscribeParam[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
@@ -1080,7 +1033,8 @@ impl Handler for SubscribeParamHandler {
 
         self.data
             .master_state
-            .register_node(&caller_id, &caller_api);
+            .register_node(&caller_id, &caller_api)
+            .await;
 
         let value = self
             .data
@@ -1091,12 +1045,9 @@ impl Handler for SubscribeParamHandler {
 
         log::info!("+CACHEDPARAM [{}] by {}", key, caller_id);
         let status = format!("Subscribed to parameter [{}]", &key);
-        log::debug!(
-            "subscribeParam[{params_str}] returns {}",
-            format_return_value(1, &status, &value)
-        );
-        let response = (1, status, value).try_to_value()?;
-        Ok(response)
+        let response = SubscribeParamResponse::new(1, status, value);
+        log::debug!("subscribeParam[{params_str}] returns [{response}]");
+        Ok(response.try_to_value()?)
     }
 }
 
@@ -1119,15 +1070,15 @@ impl Handler for SubscribeParamHandler {
 struct UnSubscribeParamHandler {
     data: Arc<RosData>,
 }
-type UnSubscribeParamResponse = (i32, String, i32);
+type UnSubscribeParamResponse = CommonResponse<i32>;
 #[async_trait]
 impl Handler for UnSubscribeParamHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "unsubscribeParam", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("unsubscribeParam[{params_str}]");
         type Request = (String, String, String);
         let (caller_id, caller_api, key) = Request::try_from_params(params)?;
@@ -1138,18 +1089,15 @@ impl Handler for UnSubscribeParamHandler {
             .parameters
             .unsubscribe(caller_id.clone(), key.clone(), caller_api);
 
-        log::debug!("unsubscribeParam({params_str}) removed: {removed}");
+        log::debug!("unsubscribeParam[{params_str}] removed: {removed}");
 
         let status = if removed {
             format!("Unsubscribe to parameter [{}]", key)
         } else {
             "".to_string()
         };
-        let response = (1, status, if removed { 1 } else { 0 });
-        log::debug!(
-            "unsubscribeParam[{params_str}] returns {}",
-            format_return_value(response.0, &response.1, &Value::i4(response.2))
-        );
+        let response = UnSubscribeParamResponse::new(1, status, if removed { 1 } else { 0 });
+        log::debug!("unsubscribeParam[{params_str}] returns [{response}]");
         Ok(response.try_to_value()?)
     }
 }
@@ -1183,15 +1131,12 @@ fn resolve(caller_id: &str, key: &str) -> String {
 struct HasParamHandler {
     data: Arc<RosData>,
 }
-type HasParamResponse = (i32, String, bool);
+type HasParamResponse = CommonResponse<bool>;
 #[async_trait]
 impl Handler for HasParamHandler {
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "hasParam", skip_all))]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("hasParam[{params_str}]");
 
         type Request = (String, String);
@@ -1202,11 +1147,8 @@ impl Handler for HasParamHandler {
             .parameters
             .contains(&key)
             .map_err(|e| DxrError::invalid_data(e))?;
-        let response = (1, key, has);
-        log::debug!(
-            "hasParam[{params_str}] returns {}",
-            format_return_value(response.0, &response.1, &Value::boolean(response.2))
-        );
+        let response = HasParamResponse::new(1, key, has);
+        log::debug!("hasParam[{params_str}] returns [{response}]");
         Ok(response.try_to_value()?)
     }
 }
@@ -1227,15 +1169,15 @@ impl Handler for HasParamHandler {
 struct GetParamNamesHandler {
     data: Arc<RosData>,
 }
-type GetParamNamesResponse = (i32, String, Vec<String>);
+type GetParamNamesResponse = CommonResponse<Vec<String>>;
 #[async_trait]
 impl Handler for GetParamNamesHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "getParamNames", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("getParamNames[{params_str}]");
         let a = <(String, String)>::try_from_params(params);
         let b = <(String,)>::try_from_params(params);
@@ -1245,15 +1187,8 @@ impl Handler for GetParamNamesHandler {
         }
 
         let keys: Vec<String> = self.data.parameters.get_keys();
-        let response = (1, "Parameter names".to_string(), keys.clone());
-        log::debug!(
-            "getParamNames[{params_str}] returns {}",
-            format_return_value(
-                response.0,
-                response.1.as_str(),
-                &response.2.try_to_value().unwrap()
-            )
-        );
+        let response = GetParamNamesResponse::new(1, "Parameter names".to_string(), keys.clone());
+        log::debug!("getParamNames[{params_str}] returns [{response}]");
         Ok(response.try_to_value()?)
     }
 }
@@ -1278,18 +1213,15 @@ struct DebugOutputHandler {
 }
 #[async_trait]
 impl Handler for DebugOutputHandler {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "system.multicall", skip_all)
+    )]
     async fn handle(&self, params: &[Value], _headers: HeaderMap) -> HandlerResult {
-        let params_str = params
-            .iter()
-            .map(|v| format_value(v))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let params_str = param_to_string(params);
         log::debug!("system.multicall[{params_str}]");
-        let response = (1, "", "");
-        log::debug!(
-            "system.multicall[{params_str}] returns {}",
-            format_return_value(response.0, response.1, &response.2.try_to_value().unwrap())
-        );
+        let response = CommonResponse::<String>::new(1, "", "".to_string());
+        log::debug!("system.multicall[{params_str}] returns [{response}]");
         Ok(response.try_to_value()?)
     }
 }
@@ -1372,9 +1304,16 @@ impl Master {
             .nest("/", self.create_router())
             .nest("/RPC2", self.create_router());
 
+        #[cfg(feature = "tracing")]
+        let router = router.layer(tower_http::trace::TraceLayer::new_for_http());
+
         log::info!("roscore-rs is listening on {}", bind_address);
         let server = Server::from_route(router);
         Ok(server.serve(bind_address).await?)
+    }
+
+    pub async fn send_requests(&self) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

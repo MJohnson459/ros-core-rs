@@ -1,5 +1,4 @@
-extern crate dxr;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use dashmap::{DashMap, Entry};
 
@@ -15,13 +14,13 @@ pub struct MasterState {
     /// A map of topic names to the type of the topic.
     topics: DashMap<String, String>,
     /// A map of topic names to the set of nodes that are subscribed to that topic.
-    subscriptions: DashMap<String, HashSet<String>>,
+    subscriptions: DashMap<String, BTreeSet<String>>,
     /// A map of topic names to the set of nodes that are publishing to that topic.
-    publications: DashMap<String, HashSet<String>>,
+    publications: DashMap<String, BTreeSet<String>>,
 }
 
 impl MasterState {
-    pub fn register_node(&self, caller_id: &str, caller_api: &str) {
+    pub async fn register_node(&self, caller_id: &str, caller_api: &str) {
         match self.nodes.entry(caller_id.to_owned()) {
             Entry::Vacant(v) => {
                 v.insert(caller_api.to_owned());
@@ -38,26 +37,16 @@ impl MasterState {
                         "Node {caller_id} re-registered with different API: {old_api} -> {caller_api}"
                     );
                     self.cleanup_node(caller_id);
+                    let res = shutdown_node(&old_api, caller_id).await;
+                    if let Err(e) = res {
+                        log::warn!("Error shutting down previous instance of node '{caller_id}': {e:?}. New node will be registered regardless. Check for stray processes.");
+                    }
                 }
             }
         }
-
-        // let res = shutdown_node(&shutdown_api_url, caller_id).await;
-        // if let Err(e) = res {
-        //     log::warn!("Error shutting down previous instance of node '{caller_id}': {e:?}. New node will be registered regardless. Check for stray processes.");
-        // }
     }
 
-    pub fn register_service(
-        &self,
-        caller_id: &str,
-        service: &str,
-        service_api: &str,
-        caller_api: &str,
-    ) {
-        log::error!("Registering service {caller_id} {service} {service_api} {caller_api}");
-        self.register_node(&caller_id, &caller_api);
-
+    pub fn register_service(&self, caller_id: &str, service: &str, service_api: &str) {
         // If the service already exists, remove the old provider
         // self.unregister_service(caller_id, service, service_api);
 
@@ -91,10 +80,8 @@ impl MasterState {
         caller_id: &str,
         topic: &str,
         topic_type: &str,
-        caller_api: &str,
     ) -> Vec<String> {
         let topic = resolve(&caller_id, &topic);
-        self.register_node(&caller_id, &caller_api);
 
         if let Some(known_topic_type) = self.topics.get(&topic.clone()) {
             if known_topic_type.as_str() != topic_type && topic_type != "*" {
@@ -158,10 +145,8 @@ impl MasterState {
         caller_id: &str,
         topic: &str,
         topic_type: &str,
-        caller_api: &str,
     ) -> Vec<String> {
         let topic = resolve(&caller_id, &topic);
-        self.register_node(&caller_id, &caller_api);
 
         if let Some(existing_type) = self.topics.get(&topic.clone()) {
             if existing_type.as_str() != topic_type {
@@ -304,6 +289,9 @@ impl MasterState {
                 result.push((topic.key().to_string(), data_type.to_string()));
             }
         }
+
+        result.sort();
+
         result
     }
 
@@ -329,20 +317,16 @@ impl MasterState {
             .publications
             .iter()
             .map(|item| {
-                let mut node_names: Vec<_> = item.value().iter().cloned().collect();
-                node_names.sort();
-
-                (item.key().to_string(), node_names)
+                let node_names: Vec<_> = item.value().iter().cloned().collect();
+                (item.key().clone(), node_names)
             })
             .collect();
         let subscribers: Vec<(String, Vec<String>)> = self
             .subscriptions
             .iter()
             .map(|item| {
-                let mut node_names: Vec<_> = item.value().iter().cloned().collect();
-                node_names.sort();
-
-                (item.key().to_string(), node_names)
+                let node_names: Vec<_> = item.value().iter().cloned().collect();
+                (item.key().clone(), node_names)
             })
             .collect();
         let services: Vec<(String, Vec<String>)> = self
@@ -350,11 +334,11 @@ impl MasterState {
             .iter()
             .map(|item| {
                 // Only one provider per service
-                let node_names = vec![item.value().0.to_string()];
-
-                (item.key().to_string(), node_names)
+                let node_names = vec![item.value().0.clone()];
+                (item.key().clone(), node_names)
             })
             .collect();
+
         (publishers, subscribers, services)
     }
 
@@ -424,10 +408,10 @@ fn resolve(caller_id: &str, key: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_register_node() {
+    #[tokio::test]
+    async fn test_register_node() {
         let master_state = MasterState::default();
-        master_state.register_node("node_1", "http://node_1");
+        master_state.register_node("node_1", "http://node_1").await;
         assert_eq!(
             master_state.lookup_node("node_1"),
             Some("http://node_1".to_string())
@@ -437,7 +421,7 @@ mod tests {
     #[test]
     fn test_register_service() {
         let master_state = MasterState::default();
-        master_state.register_service("node_1", "service", "xmprpc://node_1", "http://node_1");
+        master_state.register_service("node_1", "service", "xmprpc://node_1");
         assert_eq!(
             master_state.lookup_service("node_1", "service"),
             Ok("xmprpc://node_1".to_string())
@@ -447,7 +431,6 @@ mod tests {
             "/sim_001/locomotor",
             "escape_recovery/set_parameters",
             "xmprpc://node_1",
-            "http://node_1",
         );
         assert_eq!(
             master_state.lookup_service("/sim_001/locomotor", "escape_recovery/set_parameters"),
@@ -458,7 +441,7 @@ mod tests {
     #[test]
     fn test_unregister_service() {
         let master_state = MasterState::default();
-        master_state.register_service("node_1", "service", "xmprpc://node_1", "http://node_1");
+        master_state.register_service("node_1", "service", "xmprpc://node_1");
         assert_eq!(
             master_state.unregister_service("node_1", "service", "xmprpc://node_1"),
             true
@@ -468,16 +451,17 @@ mod tests {
     #[test]
     fn test_register_subscriber() {
         let master_state = MasterState::default();
-        master_state.register_subscriber("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_subscriber("node_1", "topic", "std_msgs/String");
         assert!(master_state
             .lookup_subscriber("node_1", "topic")
             .contains(&"node_1".to_string()),);
     }
 
-    #[test]
-    fn test_unregister_subscriber() {
+    #[tokio::test]
+    async fn test_unregister_subscriber() {
         let master_state = MasterState::default();
-        master_state.register_subscriber("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_node("node_1", "http://node_1").await;
+        master_state.register_subscriber("node_1", "topic", "std_msgs/String");
         assert_eq!(
             master_state.unregister_subscriber("node_1", "topic", "http://node_1"),
             true
@@ -487,16 +471,17 @@ mod tests {
     #[test]
     fn test_register_publisher() {
         let master_state = MasterState::default();
-        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_publisher("node_1", "topic", "std_msgs/String");
         assert!(master_state
             .lookup_publisher("node_1", "topic")
             .contains(&"node_1".to_string()),);
     }
 
-    #[test]
-    fn test_unregister_publisher() {
+    #[tokio::test]
+    async fn test_unregister_publisher() {
         let master_state = MasterState::default();
-        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_node("node_1", "http://node_1").await;
+        master_state.register_publisher("node_1", "topic", "std_msgs/String");
         assert_eq!(
             master_state.unregister_publisher("node_1", "topic", "http://node_1"),
             Ok(true)
@@ -506,7 +491,7 @@ mod tests {
     #[test]
     fn test_get_published_topics() {
         let master_state = MasterState::default();
-        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_publisher("node_1", "topic", "std_msgs/String");
         assert_eq!(
             master_state.get_published_topics("node_1", ""),
             vec![("topic".to_string(), "std_msgs/String".to_string())],
@@ -516,7 +501,7 @@ mod tests {
     #[test]
     fn test_get_topic_types() {
         let master_state = MasterState::default();
-        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_publisher("node_1", "topic", "std_msgs/String");
         assert_eq!(
             master_state.get_topic_types(),
             vec![("topic".to_string(), "std_msgs/String".to_string())],
@@ -526,7 +511,7 @@ mod tests {
     #[test]
     fn test_get_system_state() {
         let master_state = MasterState::default();
-        master_state.register_publisher("node_1", "topic", "std_msgs/String", "http://node_1");
+        master_state.register_publisher("node_1", "topic", "std_msgs/String");
         assert_eq!(
             master_state.get_system_state(),
             (
@@ -537,49 +522,66 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_register_publisher_sorted() {
+        let master_state = MasterState::default();
+        master_state
+            .register_node("node_1", "http://LOCLAP858:45447/")
+            .await;
+        master_state
+            .register_node("node_2", "http://LOCLAP858:46319/")
+            .await;
+        master_state.register_subscriber("node_2", "topic", "std_msgs/String");
+        master_state.register_subscriber("node_1", "topic", "std_msgs/String");
+
+        let subscriber_apis = master_state.register_publisher("node_6", "topic", "std_msgs/String");
+        assert_eq!(
+            subscriber_apis,
+            vec![
+                "http://LOCLAP858:45447/".to_string(),
+                "http://LOCLAP858:46319/".to_string(),
+            ]
+        );
+    }
+
     #[test]
     fn test_lookup_service() {
         let master_state = MasterState::default();
-        master_state.register_service("node_1", "service", "http://node_1", "http://node_1");
+        master_state.register_service("node_1", "service", "http://node_1");
         assert_eq!(
             master_state.lookup_service("node_1", "service"),
             Ok("http://node_1".to_string()),
         );
     }
 
-    #[test]
-    fn test_lookup_node() {
+    #[tokio::test]
+    async fn test_lookup_node() {
         let master_state = MasterState::default();
-        master_state.register_node("node_1", "http://node_1");
+        master_state.register_node("node_1", "http://node_1").await;
         assert_eq!(
             master_state.lookup_node("node_1"),
             Some("http://node_1".to_string()),
         );
     }
 
-    #[test]
-    fn test_unregister_publisher_cleanup() {
+    #[tokio::test]
+    async fn test_unregister_publisher_cleanup() {
         let master_state = MasterState::default();
 
+        master_state
+            .register_node("publisher_1", "http://LOCLAP858:38881/")
+            .await;
+        master_state
+            .register_node("publisher_2", "http://LOCLAP858:37635/")
+            .await;
+        master_state
+            .register_node("publisher_3", "http://LOCLAP858:39641/")
+            .await;
+
         // Register 3 publishers
-        master_state.register_publisher(
-            "publisher_1",
-            "/test_topic",
-            "std_msgs/String",
-            "http://LOCLAP858:38881/",
-        );
-        master_state.register_publisher(
-            "publisher_2",
-            "/test_topic",
-            "std_msgs/String",
-            "http://LOCLAP858:37635/",
-        );
-        master_state.register_publisher(
-            "publisher_3",
-            "/test_topic",
-            "std_msgs/String",
-            "http://LOCLAP858:39641/",
-        );
+        master_state.register_publisher("publisher_1", "/test_topic", "std_msgs/String");
+        master_state.register_publisher("publisher_2", "/test_topic", "std_msgs/String");
+        master_state.register_publisher("publisher_3", "/test_topic", "std_msgs/String");
 
         assert_eq!(
             master_state.lookup_publisher("test", "/test_topic").len(),
@@ -591,18 +593,14 @@ mod tests {
             master_state.unregister_publisher(
                 "publisher_1",
                 "/test_topic",
-                "http://LOCLAP858:38881/",
+                "http://LOCLAP858:38881/"
             ),
             Ok(true)
         );
 
         // Register subscriber - should only see remaining 2 publishers
-        let subscriber_apis = master_state.register_subscriber(
-            "subscriber_1",
-            "/test_topic",
-            "std_msgs/String",
-            "http://subscriber_1",
-        );
+        let subscriber_apis =
+            master_state.register_subscriber("subscriber_1", "/test_topic", "std_msgs/String");
 
         assert_eq!(subscriber_apis.len(), 2);
 
@@ -612,16 +610,22 @@ mod tests {
         assert!(!remaining.contains(&"http://LOCLAP858:38881/".to_string()));
     }
 
-    #[test]
-    fn test_port_mismatch_unregistration() {
+    #[tokio::test]
+    async fn test_port_mismatch_unregistration() {
         let master_state = MasterState::default();
+
+        master_state
+            .register_node("speed_limiter_nodelets", "http://LOCLAP858:38881/")
+            .await;
+        master_state
+            .register_node("locomotor", "http://LOCLAP858:37635/")
+            .await;
 
         // Register publisher
         master_state.register_publisher(
             "speed_limiter_nodelets",
             "/expected_category",
             "std_msgs/Int8",
-            "http://LOCLAP858:38881/",
         );
 
         let publishers = master_state.lookup_publisher("test", "/expected_category");
@@ -641,43 +645,42 @@ mod tests {
         assert_eq!(publishers_after.len(), 1);
 
         // Subscriber should still see the publisher
-        let subscriber_apis = master_state.register_subscriber(
-            "subscriber_1",
-            "/expected_category",
-            "std_msgs/Int8",
-            "http://subscriber_1",
-        );
+        let subscriber_apis =
+            master_state.register_subscriber("subscriber_1", "/expected_category", "std_msgs/Int8");
 
         assert_eq!(subscriber_apis.len(), 1);
         assert!(subscriber_apis.contains(&"http://LOCLAP858:38881/".to_string()));
     }
 
-    #[test]
-    fn test_node_reregistration_scenario() {
+    #[tokio::test]
+    async fn test_node_reregistration_scenario() {
         let master_state = MasterState::default();
+
+        master_state
+            .register_node("speed_limiter_nodelets", "http://LOCLAP858:38881/")
+            .await;
+
+        master_state
+            .register_node("locomotor", "http://LOCLAP858:37635/")
+            .await;
 
         // Register publishers
         master_state.register_publisher(
             "speed_limiter_nodelets",
             "/expected_category",
             "std_msgs/Int8",
-            "http://LOCLAP858:38881/",
         );
-        master_state.register_publisher(
-            "locomotor",
-            "/expected_category",
-            "std_msgs/Int8",
-            "http://LOCLAP858:37635/",
-        );
+        master_state.register_publisher("locomotor", "/expected_category", "std_msgs/Int8");
 
         // Re-register node with different port
-        master_state.register_node("speed_limiter_nodelets", "http://LOCLAP858:36917/");
+        master_state
+            .register_node("speed_limiter_nodelets", "http://LOCLAP858:36917/")
+            .await;
+
         assert_eq!(
             master_state.lookup_node("speed_limiter_nodelets"),
             Some("http://LOCLAP858:36917/".to_string())
         );
-
-        println!("Re-registered node: {master_state:#?}");
 
         // Automatically unregistered
         assert_eq!(
@@ -689,15 +692,9 @@ mod tests {
             Ok(false)
         );
 
-        println!("Re-registered node: {master_state:#?}");
-
         // Register subscriber - should only see remaining publisher
-        let subscriber_apis = master_state.register_subscriber(
-            "subscriber_1",
-            "/expected_category",
-            "std_msgs/Int8",
-            "http://subscriber_1",
-        );
+        let subscriber_apis =
+            master_state.register_subscriber("subscriber_1", "/expected_category", "std_msgs/Int8");
 
         assert_eq!(subscriber_apis.len(), 1);
         let remaining: Vec<_> = subscriber_apis.into_iter().collect();
