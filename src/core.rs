@@ -1,4 +1,3 @@
-extern crate dxr;
 use dxr_client::{Client, ClientBuilder, Url};
 use paste::paste;
 use std::collections::HashMap;
