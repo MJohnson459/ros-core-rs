@@ -7,16 +7,16 @@
 //!
 //! ```bash
 //! # Basic usage - replay all requests from log file
-//! cargo run --bin replay_log -- output.jsonl
+//! cargo run -p log_replay --bin replay_log -- output.jsonl
 //!
 //! # Specify custom target URI
-//! cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
+//! cargo run -p log_replay --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
 //!
 //! # Filter by function name
-//! cargo run --bin replay_log -- --function-filter getParam output.jsonl
+//! cargo run -p log_replay --bin replay_log -- --function-filter getParam output.jsonl
 //!
 //! # Limit number of requests to replay
-//! cargo run --bin replay_log -- --max-requests 100 output.jsonl
+//! cargo run -p log_replay --bin replay_log -- --max-requests 100 output.jsonl
 //! ```
 //!
 //! ## Log File Format
@@ -61,7 +61,7 @@
 //! 4. **Replay Against Your Implementation**: Replay the same log against your implementation:
 //!    ```bash
 //!    cargo run --release
-//!    cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
+//!    cargo run -p log_replay --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
 //!    ```
 //!
 //! ## Exit Codes

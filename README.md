@@ -21,28 +21,6 @@ To start the ROS core, run the following command:
 RUST_LOG=debug cargo run
 ```
 
-And run any of your ROS stack, eg., the [python chatter example](http://wiki.ros.org/ROS/Tutorials/WritingPublisherSubscriber%28python%29).
-
-### Talker/Listener
-
-This [example](./examples/chatter/main.rs) creates a single binary which contains:
-
-- ROS core
-- ROS publisher
-- ROS subscriber
-
-To run the talker/listener example, execute the following command:
-
-```bash
-RUST_LOG=info ROSRUST_MSG_PATH=`realpath examples/chatter/msgs` cargo run --example chatter --release
-```
-
-This example creates a single binary that includes a standalone implementation
-of the ROS core, as well as a ROS publisher and ROS subscriber. This
-implementation is inspired by the official chatter python example from the ROS
-wiki, which demonstrates a simple communication between two nodes using ROS
-messages.
-
 ### Debugging with official ROS docker image
 
 To showcase that this ROS core implementation can be used with official ROS
@@ -72,8 +50,8 @@ We welcome contributions to this project! If you find a bug or have a feature
 request, please create an issue on the GitHub repository. If you want to
 contribute code, feel free to submit a pull request.
 
-
 ## Cross-compilation to arm64
+
 ```bash
 apt install libssl-dev:arm64
 export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu/
