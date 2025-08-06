@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
             .init();
     }
     #[cfg(not(feature = "tracing"))]
-    env_logger::init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let uri = get_uri();
     log::debug!("uri: {}", uri);
