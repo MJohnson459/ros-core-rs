@@ -28,7 +28,7 @@ gave to them. Finally, we can compare those to running the real ROS master.
 ```bash
 rosmaster
 # In another terminal
-cargo run --bin replay_log -- output.jsonl
+cargo run -p log_replay --bin replay_log -- output.jsonl
 ```
 
 This will generate an output which shows any errors, and the performance of it.
@@ -38,5 +38,5 @@ and replay against it!
 ```bash
 cargo run --release --bin ros-core-rs
 # In another terminal
-cargo run --bin replay_log -- output.jsonl
+cargo run -p log_replay --bin replay_log -- output.jsonl
 ```

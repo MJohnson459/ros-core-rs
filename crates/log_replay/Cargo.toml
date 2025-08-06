@@ -1,0 +1,16 @@
+[package]
+name = "log_replay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ros-core-rs = { path = "../../" }
+
+dxr = "0.7.1"
+anyhow = "1.0.98"
+env_logger = "0.10.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+url = "2.5.4"
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
