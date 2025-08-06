@@ -1,0 +1,41 @@
+Loading requests from: output.jsonl
+Loaded 24401 requests from 24401 lines
+Testing ROS Master at: http://localhost:11311
+Workers: 1
+Starting performance test with 1 workers, 24401 requests...
+
+=== Replay Results ===
+Total Requests: 24401
+
+Results Summary:
+  Matching: 24401
+  Mismatching: 0
+  Target Errors: 0
+  Log Errors: 0
+
+Success Rate: 100.00%
+
+=== Performance Summary ===
+Total execution time: 8.240053942s
+
+Breakdown by endpoint:
+Function             Calls      Total Time      Avg Time        Min/Max Time
+---------------------------------------------------------------------------
+getParam             4983       1.454612325   s 0.291914    ms      "291.000µs/0.000ms"
+getParamNames        1          0.031030950   s 31.030950   ms      "31030.000µs/31.000ms"
+getPid               8          0.002857087   s 0.357135    ms      "357.000µs/0.000ms"
+getPublishedTopics   54         0.509619922   s 9.437405    ms      "9437.000µs/9.000ms"
+getSystemState       4          0.146825141   s 36.706285   ms      "36706.000µs/36.000ms"
+hasParam             8865       2.562250508   s 0.289029    ms      "289.000µs/0.000ms"
+lookupNode           76         0.025067323   s 0.329833    ms      "329.000µs/0.000ms"
+lookupService        675        0.237468543   s 0.351805    ms      "351.000µs/0.000ms"
+registerPublisher    679        0.298970954   s 0.440310    ms      "440.000µs/0.000ms"
+registerService      282        0.092505718   s 0.328034    ms      "328.000µs/0.000ms"
+registerSubscriber   523        0.165931837   s 0.317269    ms      "317.000µs/0.000ms"
+searchParam          1762       0.523931732   s 0.297350    ms      "297.000µs/0.000ms"
+setParam             4070       1.211713822   s 0.297718    ms      "297.000µs/0.000ms"
+subscribeParam       476        0.141112668   s 0.296455    ms      "296.000µs/0.000ms"
+unregisterPublisher  679        0.260347126   s 0.383427    ms      "383.000µs/0.000ms"
+unregisterService    282        0.127955006   s 0.453741    ms      "453.000µs/0.000ms"
+unregisterSubscriber 523        0.202053139   s 0.386334    ms      "386.000µs/0.000ms"
+unsubscribeParam     459        0.156460237   s 0.340871    ms      "340.000µs/0.000ms"

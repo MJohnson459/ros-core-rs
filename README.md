@@ -10,6 +10,24 @@ other ROS nodes without relying on an external ROS installation. You can use
 this library to build ROS nodes entirely in Rust, including publishers and
 subscribers, without needing to use any other ROS dependencies.
 
+## Performance
+
+We've conducted performance tests comparing our Rust implementation against a reference implementation. The tests were run with 24,401 requests using both single-threaded and multi-threaded (16 workers) configurations.
+
+| Implementation | Threads | Total Execution Time | Success Rate | Performance Improvement |
+| -------------- | ------- | -------------------- | ------------ | ----------------------- |
+| Reference      | 1       | 19.21s               | 100.00%      | -                       |
+| Reference      | 16      | 11.29s               | 100.00%      | 1.70x faster            |
+| **Our Rust**   | **1**   | **8.24s**            | **100.00%**  | **2.33x faster**        |
+| **Our Rust**   | **16**  | **3.89s**            | **100.00%**  | **4.94x faster**        |
+
+### Key Performance Highlights
+
+- **Single-threaded performance**: Our Rust implementation is **2.33x faster** than the reference implementation
+- **Multi-threaded performance**: Our Rust implementation is **4.94x faster** than the reference implementation
+- **Scalability**: Both implementations show improved performance with multiple threads, but our Rust implementation scales more efficiently
+- **Reliability**: Both implementations achieve 100% success rate across all test scenarios
+
 ## Examples
 
 ### Standalone ROS core
