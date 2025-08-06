@@ -9,7 +9,7 @@ To test this, you can run this core which will generate debug output logs using
 this command
 
 ```bash
-RUST_LOG=debug cargo run --release --bin ros-core-rs |& tee output.log
+RUST_LOG=debug cargo run --release |& tee output.log
 # Just to ensure we have a run_id set, run this in another terminal. And uuid will do.
 rosparam set /run_id 2ffbf8a4-5cb6-11f0-b764-13f1aaf73515
 ```
@@ -32,11 +32,11 @@ cargo run -p log_replay --bin replay_log -- output.jsonl
 ```
 
 This will generate an output which shows any errors, and the performance of it.
-If you want to compare performance, you can run the `ros-core-rs` command again
+If you want to compare performance, you can run the `rustmaster` command again
 and replay against it!
 
 ```bash
-cargo run --release --bin ros-core-rs
+cargo run --release
 # In another terminal
 cargo run -p log_replay --bin replay_log -- output.jsonl
 ```

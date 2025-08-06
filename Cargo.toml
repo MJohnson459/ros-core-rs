@@ -60,3 +60,7 @@ tracing = ["tower-http", "dep:tracing", "tracing-subscriber", "tracing-tracy"]
 [[bench]]
 name = "param_tree"
 harness = false
+
+[[bin]]
+name = "rustmaster"
+path = "src/main.rs"

@@ -44,7 +44,7 @@
 //!
 //! 1. **Generate Log File**: Start your ROS Master with debug logging:
 //!    ```bash
-//!    RUST_LOG=debug cargo run --release --bin ros-core-rs |& tee output.log
+//!    RUST_LOG=debug cargo run --release |& tee output.log
 //!    ```
 //!
 //! 2. **Convert Log to JSONL**: Convert the debug log to JSONL format:
@@ -60,7 +60,7 @@
 //!
 //! 4. **Replay Against Your Implementation**: Replay the same log against your implementation:
 //!    ```bash
-//!    cargo run --release --bin ros-core-rs
+//!    cargo run --release
 //!    cargo run --bin replay_log -- --target-uri http://localhost:11312 output.jsonl
 //!    ```
 //!
