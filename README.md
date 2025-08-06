@@ -76,3 +76,38 @@ export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu/
 export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu/
 cargo build --target aarch64-unknown-linux-gnu --release
 ```
+
+## Packaging
+
+To create a debian, you can use the `cargo-deb` plugin:
+
+```rust
+cargo deb
+```
+
+This will create a debian in `target/debian` which can be used to install the
+`rustmaster` binary on a system.
+
+## Running
+
+To run the `rustmaster` instead of the default, there are two options.
+
+1. If you just want to run this manually without modifying the system, you will
+   need to run the `rustmaster` **before** launching any other ROS component.
+   Once it is running, ROS will automatically use it.
+
+```bash
+rustmaster
+roslaunch some_pkg some_robot.launch
+```
+
+2. To make it the permanent option, you will need to make it prefered over
+   `rosmaster`. To do this, you will need to create a symlink and then make sure
+   it has priority on the path:
+
+```bash
+ln -sf /usr/bin/rustmaster ~/.local/bin/rosmaster
+export PATH="$HOME/.local/bin/:$PATH"
+
+roslaunch some_pkg some_robot.launch
+```
